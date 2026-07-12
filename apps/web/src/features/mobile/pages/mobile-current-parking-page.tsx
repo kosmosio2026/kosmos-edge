@@ -22,6 +22,39 @@ function formatCurrency(value?: number | null) {
   return `${Number(value).toLocaleString('ko-KR')}원`;
 }
 
+function getCurrentParkingSessionId() {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem('kosmos.currentParkingSessionId') ?? '';
+}
+
+function withCurrentSessionId(path: string) {
+  const sessionId = getCurrentParkingSessionId();
+  return sessionId ? `${path}?sessionId=${encodeURIComponent(sessionId)}` : path;
+}
+
+function getCurrentParkingOwnerType() {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem('kosmos.currentParkingSessionOwnerType') ?? '';
+}
+
+function getCurrentParkingAuthToken() {
+  if (typeof window === 'undefined') return '';
+
+  const ownerType = getCurrentParkingOwnerType();
+  const visitorToken = localStorage.getItem('kosmos.visitorAccessToken') ?? '';
+  const memberToken = localStorage.getItem('kosmos.memberAccessToken') ?? '';
+  const sessionId = getCurrentParkingSessionId();
+
+  if (ownerType === 'visitor') return visitorToken || getToken();
+  if (ownerType === 'member') return memberToken || getToken();
+
+  // QR 방문객은 앱 없이 사용하는 경우가 많으므로,
+  // 현재 주차 세션 ID가 있으면 방문객 토큰을 우선 사용한다.
+  if (sessionId && visitorToken) return visitorToken;
+
+  return getToken();
+}
+
 export default function MobileCurrentParkingPage() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
@@ -30,7 +63,7 @@ export default function MobileCurrentParkingPage() {
 
   useEffect(() => {
     async function loadCurrent() {
-      const token = getToken();
+      const token = getCurrentParkingAuthToken();
 
       if (!token) {
         window.location.href = '/mobile';
@@ -38,7 +71,7 @@ export default function MobileCurrentParkingPage() {
       }
 
       try {
-        const res = await fetch(`${API_BASE}/mobile/parking/current`, {
+        const res = await fetch(`${API_BASE}${withCurrentSessionId('/mobile/parking/current')}`, {
           headers: {
             authorization: `Bearer ${token}`,
           },
@@ -53,7 +86,7 @@ export default function MobileCurrentParkingPage() {
 
         setCurrent(data?.current ?? null);
 
-        const feeRes = await fetch(`${API_BASE}/mobile/parking/current/fee-preview`, {
+        const feeRes = await fetch(`${API_BASE}${withCurrentSessionId('/mobile/parking/current/fee-preview')}`, {
           headers: {
             authorization: `Bearer ${token}`,
           },
@@ -234,7 +267,7 @@ export default function MobileCurrentParkingPage() {
                 href="/mobile/payments"
                 className="block rounded-2xl bg-blue-600 px-5 py-4 text-center text-base font-black text-white shadow-lg shadow-blue-600/20"
               >
-                결제/영수증 확인
+                요금 결제/영수증 확인
               </a>
             </div>
           ) : null}

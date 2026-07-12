@@ -180,19 +180,42 @@ function blockManualHyphen(event: any, setMessage: (message: string | null) => v
   }
 }
 
+function clearVisitorPinLoginStorage() {
+  if (typeof window === 'undefined') return;
+
+  [
+    'kosmos.visitorAccessToken',
+    'kosmos.visitorSession',
+    'kosmos.visitorUser',
+    'kosmos.currentParkingSessionId',
+    'kosmos.currentParkingSessionOwnerType',
+  ].forEach((key) => localStorage.removeItem(key));
+
+  Object.keys(localStorage)
+    .filter((key) => key.startsWith('kosmos.visitor'))
+    .forEach((key) => localStorage.removeItem(key));
+}
+
 function hasMobileMemberToken() {
   return Boolean(getMobileToken());
 }
 
-async function apiFetch(path: string, options: RequestInit = {}) {
-  const token = getMobileToken() || getVisitorToken();
+type MobileApiFetchOptions = RequestInit & {
+  accessToken?: string | null;
+  auth?: boolean;
+};
+
+async function apiFetch(path: string, options: MobileApiFetchOptions = {}) {
+  const { accessToken, auth, ...fetchOptions } = options;
+  const token =
+    accessToken ?? (auth === false ? '' : getMobileToken() || getVisitorToken());
 
   const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
+    ...fetchOptions,
     headers: {
       'content-type': 'application/json',
       ...(token ? { authorization: `Bearer ${token}` } : {}),
-      ...(options.headers ?? {}),
+      ...(fetchOptions.headers ?? {}),
     },
     cache: 'no-store',
   });
@@ -211,6 +234,16 @@ async function apiFetch(path: string, options: RequestInit = {}) {
   }
 
   return json;
+}
+
+function getVisitorSessionPhone(session: any) {
+  return String(
+    session?.phone ??
+      session?.contactPhone ??
+      session?.visitor?.phone ??
+      session?.visitorProfile?.phone ??
+      '',
+  ).trim();
 }
 
 export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }: Props) {
@@ -283,6 +316,16 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
     [spaces, selectedSpaceId],
   );
 
+  useEffect(() => {
+    if (!visitorLoggedIn) return;
+
+    const phone = getVisitorSessionPhone(getVisitorSession());
+
+    if (phone) {
+      setContactPhone(formatKoreanMobilePhone(phone));
+    }
+  }, [visitorLoggedIn]);
+
   async function load() {
     setLoading(true);
     setMessage(null);
@@ -352,6 +395,20 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registerMode]);
 
+  function logoutVisitorPin() {
+    clearVisitorPinLoginStorage();
+
+    setVisitorLoggedIn(false);
+    setVisitorSession(null);
+    setContactPhone('');
+    setPhoneVerified(false);
+    setVerificationRequested(false);
+    setVerificationCode('');
+    setVisitorPinCode('');
+    setVisitorPinCodeConfirm('');
+    setMessage('방문객 PIN 로그아웃되었습니다.');
+  }
+
   function requestVerificationCode() {
     setMessage(null);
 
@@ -383,24 +440,29 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
   }
 
   async function loadMemberVehicles() {
+    if (typeof window === 'undefined') return;
+
     const token = getMobileToken();
 
-    setMemberLoggedIn(Boolean(token));
-
     if (!token) {
-      setMemberVehicles([]);
+      setMemberLoggedIn(false);
       setMemberUser(null);
+      setMemberVehicles([]);
       setSelectedVehicleId('');
       setSelectedPlateNumber('');
+      setMemberLoading(false);
       return;
     }
 
     setMemberLoading(true);
 
     try {
-      const data = await apiFetch('/mobile/member/vehicles');
+      const data = await apiFetch('/mobile/member/vehicles', {
+        accessToken: token,
+      });
 
       const vehicles = Array.isArray(data?.vehicles) ? data.vehicles : [];
+      setMemberLoggedIn(true);
       setMemberUser(data?.user ?? null);
       setMemberVehicles(vehicles);
 
@@ -410,9 +472,17 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
 
         setSelectedVehicleId(primary?.id ?? '');
         setSelectedPlateNumber(primary?.plateNumber ?? '');
+      } else {
+        setSelectedVehicleId('');
+        setSelectedPlateNumber('');
       }
     } catch (error: any) {
-      setMessage(error?.message ?? '등록 차량을 불러오지 못했습니다.');
+      setMemberLoggedIn(false);
+      setMemberUser(null);
+      setMemberVehicles([]);
+      setSelectedVehicleId('');
+      setSelectedPlateNumber('');
+      setMessage(error?.message ?? '회원 차량 정보를 불러오지 못했습니다.');
     } finally {
       setMemberLoading(false);
     }
@@ -443,14 +513,29 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
       setSaving(true);
 
       try {
-        await apiFetch(`/mobile/qr/${qrToken}/register-member`, {
+        const result = await apiFetch(`/mobile/qr/${qrToken}/register-member`, {
           method: 'POST',
+          accessToken: token,
           body: JSON.stringify({
             parkingSpaceId: selectedSpaceId,
             vehicleId: selectedVehicleId || undefined,
             plateNumber: selectedVehicleId ? undefined : selectedPlateNumber,
           }),
         });
+
+        const selectedSpace = spaces.find((space) => space.id === selectedSpaceId);
+        const currentParkingSessionId =
+          result?.sessionId ??
+          result?.parkingSessionId ??
+          result?.session?.id ??
+          result?.parkingSession?.id ??
+          selectedSpace?.activeSessionId ??
+          '';
+
+        if (currentParkingSessionId && typeof window !== 'undefined') {
+          localStorage.setItem('kosmos.currentParkingSessionId', currentParkingSessionId);
+          localStorage.setItem('kosmos.currentParkingSessionOwnerType', 'member');
+        }
 
         await load();
         setMessage('회원 주차 등록이 완료되었습니다. 현재 주차 화면으로 이동합니다.');
@@ -475,12 +560,7 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
     const visitorSessionNow = getVisitorSession();
     const visitorAlreadyLoggedIn = Boolean(visitorToken);
 
-    const sessionPhone =
-      visitorSessionNow?.phone ??
-      visitorSessionNow?.contactPhone ??
-      visitorSessionNow?.visitor?.phone ??
-      visitorSessionNow?.visitorProfile?.phone ??
-      '';
+    const sessionPhone = getVisitorSessionPhone(visitorSessionNow);
 
     const submitPhone = contactPhone.trim() || String(sessionPhone ?? '').trim();
 
@@ -531,14 +611,15 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
         }),
       });
 
-      let visitorToken =
+      let nextVisitorToken =
         result?.visitorAccessToken ??
         result?.accessToken ??
         result?.token ??
         result?.auth?.accessToken ??
+        visitorToken ??
         '';
 
-      if (!visitorToken) {
+      if (!nextVisitorToken && !visitorAlreadyLoggedIn) {
         const loginResult = await apiFetch('/mobile/visitor/login', {
           method: 'POST',
           body: JSON.stringify({
@@ -547,20 +628,34 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
           }),
         });
 
-        visitorToken =
+        nextVisitorToken =
           loginResult?.accessToken ??
           loginResult?.visitorAccessToken ??
           loginResult?.token ??
           '';
       }
 
-      if (visitorToken && typeof window !== 'undefined') {
-        localStorage.setItem('kosmos.visitorAccessToken', visitorToken);
+      if (nextVisitorToken && typeof window !== 'undefined') {
+        localStorage.setItem('kosmos.visitorAccessToken', nextVisitorToken);
+      }
+
+      const selectedSpace = spaces.find((space) => space.id === selectedSpaceId);
+      const currentParkingSessionId =
+        result?.sessionId ??
+        result?.parkingSessionId ??
+        result?.session?.id ??
+        result?.parkingSession?.id ??
+        selectedSpace?.activeSessionId ??
+        '';
+
+      if (currentParkingSessionId && typeof window !== 'undefined') {
+        localStorage.setItem('kosmos.currentParkingSessionId', currentParkingSessionId);
+        localStorage.setItem('kosmos.currentParkingSessionOwnerType', 'visitor');
       }
 
       await load();
 
-      if (visitorToken) {
+      if (nextVisitorToken) {
         setMessage('방문객 주차 등록이 완료되었습니다. 현재 주차 화면으로 이동합니다.');
 
         window.setTimeout(() => {
@@ -623,19 +718,27 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
                   같은 QR을 다시 스캔한 경우 로그인 후 현재 주차, 결제, 영수증을 확인할 수 있습니다.
                 </p>
 
-                <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="mt-3 grid gap-2">
                   <a
-                    href={`/mobile/visitor/login?next=${encodeURIComponent('/mobile/payments')}`}
-                    className="rounded-2xl bg-white px-3 py-3 text-center text-xs font-black text-blue-700 ring-1 ring-blue-100"
+                    href="/mobile/payments"
+                    className="rounded-2xl bg-blue-600 px-3 py-3 text-center text-sm font-black text-white"
                   >
-                    방문객 PIN 로그인
+                    요금 결제/영수증 확인
                   </a>
-                  <a
-                    href={`/mobile/member/login?next=${encodeURIComponent('/mobile/payments')}`}
-                    className="rounded-2xl bg-blue-600 px-3 py-3 text-center text-xs font-black text-white"
-                  >
-                    회원 로그인
-                  </a>
+                  <div className="grid grid-cols-2 gap-2">
+                    <a
+                      href={`/mobile/visitor/login?next=${encodeURIComponent('/mobile/payments')}`}
+                      className="rounded-2xl bg-white px-3 py-3 text-center text-xs font-black text-blue-700 ring-1 ring-blue-100"
+                    >
+                      방문객 PIN 로그인
+                    </a>
+                    <a
+                      href={`/mobile/member/login?next=${encodeURIComponent('/mobile/payments')}`}
+                      className="rounded-2xl bg-white px-3 py-3 text-center text-xs font-black text-blue-700 ring-1 ring-blue-100"
+                    >
+                      회원 로그인
+                    </a>
+                  </div>
                 </div>
               </div>
 
@@ -908,7 +1011,16 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
                         </a>
                       ) : (
                         <div className="mt-3 rounded-2xl bg-white px-4 py-3 text-sm font-black text-emerald-700 ring-1 ring-emerald-100">
-                          방문객 로그인 확인됨
+                          <div className="flex items-center justify-between gap-3">
+                            <span>방문객 로그인 확인됨</span>
+                            <button
+                              type="button"
+                              onClick={logoutVisitorPin}
+                              className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-black text-white"
+                            >
+                              로그아웃
+                            </button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -924,25 +1036,43 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
                     />
                   </label>
 
-                  <label className="mt-4 block">
-                    <span className="text-xs font-bold text-slate-400">연락처</span>
-                    <input
-                      value={contactPhone}
-                      onKeyDown={(event) => blockManualHyphen(event, setMessage)}
-                      onChange={(event) => {
-                        setContactPhone(formatKoreanMobilePhone(event.target.value));
-                        setPhoneVerified(false);
-                        setVerificationRequested(false);
-                        setVerificationCode('');
-                      }}
-                      placeholder="예: 01029831136"
-                      inputMode="numeric"
-                      className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-4 text-base font-bold outline-none focus:border-blue-500"
-                    />
-                    <p className="mt-2 text-xs font-bold text-slate-400">
-                      숫자만 입력하세요. 하이픈은 자동으로 입력됩니다.
-                    </p>
-                  </label>
+                  {visitorLoggedIn ? (
+                    <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-4">
+                      <p className="text-xs font-bold text-emerald-700">
+                        로그인 연락처
+                      </p>
+                      <p className="mt-1 text-base font-black text-emerald-950">
+                        {contactPhone ||
+                          formatKoreanMobilePhone(
+                            getVisitorSessionPhone(visitorSession ?? getVisitorSession()),
+                          ) ||
+                          '-'}
+                      </p>
+                      <p className="mt-1 text-xs font-bold text-emerald-700">
+                        방문객 PIN 로그인 정보의 연락처가 자동 적용됩니다.
+                      </p>
+                    </div>
+                  ) : (
+                    <label className="mt-4 block">
+                      <span className="text-xs font-bold text-slate-400">연락처</span>
+                      <input
+                        value={contactPhone}
+                        onKeyDown={(event) => blockManualHyphen(event, setMessage)}
+                        onChange={(event) => {
+                          setContactPhone(formatKoreanMobilePhone(event.target.value));
+                          setPhoneVerified(false);
+                          setVerificationRequested(false);
+                          setVerificationCode('');
+                        }}
+                        placeholder="예: 01029831136"
+                        inputMode="numeric"
+                        className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-4 text-base font-bold outline-none focus:border-blue-500"
+                      />
+                      <p className="mt-2 text-xs font-bold text-slate-400">
+                        숫자만 입력하세요. 하이픈은 자동으로 입력됩니다.
+                      </p>
+                    </label>
+                  )}
 
                   {registerMode === 'visitor' && !visitorLoggedIn ? (
                     <div className="mt-4 rounded-3xl border border-slate-100 bg-slate-50 p-4">

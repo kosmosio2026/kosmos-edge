@@ -253,7 +253,7 @@ export class BillingService {
 
     const invoice = await this.prisma.invoice.upsert({
       where: {
-        sessionId: session.id,
+        invoiceNo,
       },
       create: {
         invoiceNo,
@@ -419,7 +419,7 @@ export class BillingService {
   }
 
   async getInvoiceBySession(sessionId: string) {
-    return this.prisma.invoice.findUnique({
+    return this.prisma.invoice.findFirst({
       where: {
         sessionId,
       },
@@ -594,8 +594,8 @@ export class BillingService {
         ...(isActive === undefined ? {} : { isActive }),
         ...(parkingLotId ? { parkingLotId } : {}),
         parkingLot: {
-          ...(sido ? { sido } : {}),
-          ...(sigungu ? { sigungu } : {}),
+          ...(sido ? { region: sido } : {}),
+          ...(sigungu ? { district: sigungu } : {}),
         },
       },
       orderBy: [

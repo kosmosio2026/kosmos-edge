@@ -11,7 +11,7 @@ type Props = {
   role?: ConsoleRole;
 };
 
-type SettlementItem = {
+type 정산Item = {
   id: string;
   parkingLotId?: string | null;
   businessDate?: string | null;
@@ -29,7 +29,7 @@ type SettlementItem = {
   } | null;
 };
 
-type SettlementPreview = {
+type 정산Preview = {
   ok: true;
   businessDate: string;
   parkingLotId: string;
@@ -72,7 +72,7 @@ function formatCurrency(value?: number | null) {
   return `₩${Number(value ?? 0).toLocaleString()}`;
 }
 
-function formatDate(value?: string | null) {
+function format일자(value?: string | null) {
   if (!value) return '-';
 
   const date = new Date(value);
@@ -81,7 +81,7 @@ function formatDate(value?: string | null) {
   return formatKstDateTime(date);
 }
 
-function getTodayDateString() {
+function get종료일day일자String() {
   const date = new Date();
   const yyyy = date.getFullYear();
   const mm = String(date.getMonth() + 1).padStart(2, '0');
@@ -94,14 +94,14 @@ function getParkingLotLabel(lot: ParkingLotOption) {
   return lot.name ?? lot.code ?? lot.id;
 }
 
-export default function SettlementPage({ role = 'admin' }: Props) {
+export default function 정산Page({ role = 'admin' }: Props) {
   const { session } = useAuth();
 
-  const [items, setItems] = useState<SettlementItem[]>([]);
-  const [preview, setPreview] = useState<SettlementPreview | null>(null);
+  const [items, setItems] = useState<정산Item[]>([]);
+  const [preview, setPreview] = useState<정산Preview | null>(null);
   const [parkingLots, setParkingLots] = useState<ParkingLotOption[]>([]);
   const [selectedParkingLotId, setSelectedParkingLotId] = useState('');
-  const [businessDate, setBusinessDate] = useState(getTodayDateString());
+  const [businessDate, setBusiness일자] = useState(get종료일day일자String());
   const [loading, setLoading] = useState(false);
   const [closing, setClosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -119,12 +119,12 @@ export default function SettlementPage({ role = 'admin' }: Props) {
         accessToken: session.accessToken,
       });
 
-      setItems(unwrapList<SettlementItem>(result));
+      setItems(unwrapList<정산Item>(result));
     } catch (error) {
       setError(
         error instanceof Error
           ? error.message
-          : 'Failed to load settlements.',
+          : '정산 정보를 불러오지 못했습니다.s.',
       );
     } finally {
       setLoading(false);
@@ -164,7 +164,7 @@ export default function SettlementPage({ role = 'admin' }: Props) {
         accessToken: session.accessToken,
       });
 
-      setPreview(result as SettlementPreview);
+      setPreview(result as 정산Preview);
     } catch {
       setPreview(null);
     }
@@ -182,7 +182,7 @@ export default function SettlementPage({ role = 'admin' }: Props) {
     void loadParkingLots();
   }, [loadParkingLots]);
 
-  const handleCloseSettlement = useCallback(async () => {
+  const handleClose정산 = useCallback(async () => {
     if (!session?.accessToken) return;
     if (!canManage) return;
 
@@ -231,7 +231,7 @@ export default function SettlementPage({ role = 'admin' }: Props) {
     <main className="space-y-6 p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">정산</h1>
+          <h1 className="text-2xl font-bold">정산 현황</h1>
           <p className="text-sm text-slate-500">
             일별 정산 내역을 확인합니다.
           </p>
@@ -246,7 +246,7 @@ export default function SettlementPage({ role = 'admin' }: Props) {
 
       <section className="rounded-2xl border bg-white p-5">
         <div className="mb-4">
-          <h2 className="text-base font-semibold">Settlement Filter</h2>
+          <h2 className="text-base font-semibold">정산 Filter</h2>
           <p className="text-sm text-slate-500">
             조회할 주차장과 한국 영업일을 선택합니다.
           </p>
@@ -255,7 +255,7 @@ export default function SettlementPage({ role = 'admin' }: Props) {
         <div className="grid gap-4 md:grid-cols-[1fr_220px]">
           <label className="space-y-1">
             <span className="text-xs font-medium text-slate-500">
-              Parking Lot
+              주차장
             </span>
             <select
               value={selectedParkingLotId}
@@ -263,7 +263,7 @@ export default function SettlementPage({ role = 'admin' }: Props) {
               className="w-full rounded-xl border px-3 py-2 text-sm"
             >
               {parkingLots.length === 0 ? (
-                <option value="">No parking lots</option>
+                <option value="">주차장 없음</option>
               ) : null}
 
               {parkingLots.map((lot) => (
@@ -276,12 +276,12 @@ export default function SettlementPage({ role = 'admin' }: Props) {
 
           <label className="space-y-1">
             <span className="text-xs font-medium text-slate-500">
-              Business Date
+              Business 일자
             </span>
             <input
               type="date"
               value={businessDate}
-              onChange={(event) => setBusinessDate(event.target.value)}
+              onChange={(event) => setBusiness일자(event.target.value)}
               className="w-full rounded-xl border px-3 py-2 text-sm"
             />
           </label>
@@ -291,7 +291,7 @@ export default function SettlementPage({ role = 'admin' }: Props) {
       {canManage ? (
         <section className="rounded-2xl border bg-white p-5">
           <div className="mb-4">
-            <h2 className="text-base font-semibold">Close Daily Settlement</h2>
+            <h2 className="text-base font-semibold">Close 일별 정산</h2>
             <p className="text-sm text-slate-500">
               선택한 주차장과 영업일 기준으로 일별 정산을 마감합니다.
             </p>
@@ -300,7 +300,7 @@ export default function SettlementPage({ role = 'admin' }: Props) {
           <div className="grid gap-4 md:grid-cols-[1fr_220px_auto]">
             <label className="space-y-1">
               <span className="text-xs font-medium text-slate-500">
-                Parking Lot
+                주차장
               </span>
               <select
                 value={selectedParkingLotId}
@@ -308,7 +308,7 @@ export default function SettlementPage({ role = 'admin' }: Props) {
                 className="w-full rounded-xl border px-3 py-2 text-sm"
               >
                 {parkingLots.length === 0 ? (
-                  <option value="">No parking lots</option>
+                  <option value="">주차장 없음</option>
                 ) : null}
 
                 {parkingLots.map((lot) => (
@@ -321,12 +321,12 @@ export default function SettlementPage({ role = 'admin' }: Props) {
 
             <label className="space-y-1">
               <span className="text-xs font-medium text-slate-500">
-                Business Date
+                Business 일자
               </span>
               <input
                 type="date"
                 value={businessDate}
-                onChange={(event) => setBusinessDate(event.target.value)}
+                onChange={(event) => setBusiness일자(event.target.value)}
                 className="w-full rounded-xl border px-3 py-2 text-sm"
               />
             </label>
@@ -335,7 +335,7 @@ export default function SettlementPage({ role = 'admin' }: Props) {
               <button
                 type="button"
                 disabled={closing || !selectedParkingLotId || !businessDate}
-                onClick={() => void handleCloseSettlement()}
+                onClick={() => void handleClose정산()}
                 className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {closing ? 'Closing...' : 'Close'}
@@ -348,7 +348,7 @@ export default function SettlementPage({ role = 'admin' }: Props) {
       <section className="rounded-2xl border bg-white p-5">
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-base font-semibold">Daily Settlement Preview</h2>
+            <h2 className="text-base font-semibold">일별 정산 Preview</h2>
             <p className="text-sm text-slate-500">
               마감 전 현재 영업일 기준 정산 예상치를 확인합니다.
             </p>
@@ -456,12 +456,12 @@ export default function SettlementPage({ role = 'admin' }: Props) {
           <thead className="bg-slate-50 text-slate-600">
             <tr>
               <th className="px-4 py-3">번호</th>
-              <th className="px-4 py-3">Business Date</th>
+              <th className="px-4 py-3">Business 일자</th>
               <th className="px-4 py-3">주차장</th>
-              <th className="px-4 py-3">Total Invoice</th>
-              <th className="px-4 py-3">Total Paid</th>
-              <th className="px-4 py-3">Total Refunded</th>
-              <th className="px-4 py-3">Total Outstanding</th>
+              <th className="px-4 py-3">종료일tal Invoice</th>
+              <th className="px-4 py-3">종료일tal Paid</th>
+              <th className="px-4 py-3">종료일tal Refunded</th>
+              <th className="px-4 py-3">종료일tal Outstanding</th>
               <th className="px-4 py-3">상태</th>
               <th className="px-4 py-3">Closed At</th>
             </tr>
@@ -506,7 +506,7 @@ export default function SettlementPage({ role = 'admin' }: Props) {
                 </td>
 
                 <td className="px-4 py-3">
-                  {formatDate(item.closedAt)}
+                  {format일자(item.closedAt)}
                 </td>
               </tr>
             ))}
@@ -517,7 +517,7 @@ export default function SettlementPage({ role = 'admin' }: Props) {
                   colSpan={9}
                   className="px-4 py-10 text-center text-slate-500"
                 >
-                  No settlements.
+                  정산 내역이 없습니다.
                 </td>
               </tr>
             ) : null}

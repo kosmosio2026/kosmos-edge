@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { InvoiceStatus, SessionStatus } from '@parking/db';
+import { InvoiceStatus, SessionStatus, SpaceStatus } from '@parking/db';
 import { PrismaService } from '../../prisma/prisma.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { RedisPublisher } from '../../common/redis/redis.publisher';
@@ -118,11 +118,22 @@ export class SessionEngineService {
       throw new NotFoundException('Session not found');
     }
 
-    if (session.status !== SessionStatus.ACTIVE) {
-      throw new BadRequestException('Session is not active');
+    const exitAllowedStatuses: SessionStatus[] = [
+      SessionStatus.ACTIVE,
+      SessionStatus.GRACE_PERIOD,
+      SessionStatus.PAID,
+    ];
+
+    if (!exitAllowedStatuses.includes(session.status)) {
+      throw new BadRequestException('Session is not active or paid');
     }
 
-    const exitTime = new Date();
+    const exitTime = session.exitTime ?? new Date();
+    const billingClosedAt = session.billingClosedAt ?? exitTime;
+    const nextSessionStatus =
+      session.status === SessionStatus.PAID
+        ? SessionStatus.PAID
+        : SessionStatus.CLOSED;
     const entryTime = session.entryTime ?? session.createdAt;
 
     const totalMinutes = Math.max(
@@ -133,9 +144,9 @@ export class SessionEngineService {
     const updated = await this.prisma.parkingSession.update({
       where: { id: session.id },
       data: {
-        status: SessionStatus.CLOSED,
+        status: nextSessionStatus,
         exitTime,
-        billingClosedAt: exitTime,
+        billingClosedAt,
         totalMinutes,
       },
     });
@@ -184,6 +195,17 @@ export class SessionEngineService {
       },
     });
 
+    if (updatedWithBilling.parkingSpaceId) {
+      await this.prisma.parkingSpace.update({
+        where: {
+          id: updatedWithBilling.parkingSpaceId,
+        },
+        data: {
+          status: SpaceStatus.EMPTY,
+        },
+      });
+    }
+
     await this.redis.publish('parking.exit', {
       sessionId: updatedWithBilling.id,
       parkingSpaceId: updatedWithBilling.parkingSpaceId,
@@ -213,7 +235,13 @@ export class SessionEngineService {
     const session = await this.prisma.parkingSession.findFirst({
       where: {
         parkingSpaceId,
-        status: SessionStatus.ACTIVE,
+        status: {
+          in: [
+            SessionStatus.ACTIVE,
+            SessionStatus.GRACE_PERIOD,
+            SessionStatus.PAID,
+          ],
+        },
       },
       orderBy: {
         entryTime: 'desc',

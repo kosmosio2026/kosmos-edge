@@ -89,22 +89,16 @@ export default function MobileHomePage() {
                   지도에서 주차면 선택
                 </a>
                 <a
-                  href="/mobile/member/vehicles"
+                  href="/mobile/payments"
                   className="rounded-3xl bg-slate-50 p-4 text-sm font-black text-slate-900"
                 >
-                  내 등록 차량 보기
+                  요금 결제하기
                 </a>
                 <a
                   href="/mobile/parking/current"
                   className="rounded-3xl bg-slate-50 p-4 text-sm font-black text-slate-900"
                 >
                   현재 주차 상태 보기
-                </a>
-                <a
-                  href="/mobile/payments"
-                  className="rounded-3xl bg-slate-50 p-4 text-sm font-black text-slate-900"
-                >
-                  결제/영수증 확인
                 </a>
               </div>
 
@@ -153,7 +147,7 @@ export default function MobileHomePage() {
                   href="/mobile/payments"
                   className="rounded-3xl bg-slate-50 p-4 text-sm font-black text-slate-900"
                 >
-                  결제/영수증 확인
+                  요금 결제/영수증 확인
                 </a>
               </div>
 

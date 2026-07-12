@@ -28,6 +28,8 @@ function getActiveMenuHref(
 }
 
 const groupTitles: Record<string, string> = {
+  parking: '주차 관리',
+  PARKING: '주차 관리',
   dashboard: '대시보드',
   approvals: '승인 관리',
   facilities: '시설 관리',
@@ -69,7 +71,7 @@ export function AppSidebar() {
           return (
             <div key={groupKey}>
               <div className="mb-2 px-2 text-[11px] font-medium uppercase tracking-wider text-slate-500">
-                {groupTitles[groupKey] ?? groupKey}
+                {groupTitles[groupKey] ?? (groupKey === 'parking' || groupKey === 'PARKING' ? '주차 관리' : groupKey)}
               </div>
 
               <div className="space-y-1">

@@ -1,36 +1,30 @@
-import Link from 'next/link';
+import { KOSMOS_COMPANY, KOSMOS_LEGAL_LINKS } from '@/lib/kosmos-company';
 
 export function OperatorTabletFooter() {
   return (
-    <footer className="border-t border-slate-200 bg-white px-6 py-5 text-xs font-bold text-slate-500">
-      <div className="mx-auto flex max-w-7xl flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <div className="font-black text-slate-800">
-            © 2026 Kosmos Parking. All rights reserved.
-          </div>
-          <div className="mt-1">
-            코스모스 주식회사 | 전라남도 화순군 화순읍 홍문길 4 | 010-2983-1136 | admin@kosmos.io.kr
-          </div>
+    <footer className="border-t border-slate-200 bg-white px-4 py-5 text-xs text-slate-500">
+      <div className="space-y-2">
+        <div className="flex flex-wrap gap-x-4 gap-y-2 font-semibold">
+          {KOSMOS_LEGAL_LINKS.map((item) => (
+            <a key={item.href} href={item.href} className="hover:text-slate-900">
+              {item.label}
+            </a>
+          ))}
         </div>
 
-        <nav className="flex flex-wrap gap-x-4 gap-y-2">
-          <Link href="/mobile/terms" className="hover:text-blue-600 hover:underline">
-            이용약관
-          </Link>
-          <Link href="/mobile/location-terms" className="hover:text-blue-600 hover:underline">
-            위치정보 이용약관
-          </Link>
-          <Link href="/mobile/privacy" className="hover:text-blue-600 hover:underline">
-            개인정보처리방침
-          </Link>
-          <a href="tel:010-2983-1136" className="hover:text-blue-600 hover:underline">
-            연락처
-          </a>
-          <a href="mailto:admin@kosmos.io.kr" className="hover:text-blue-600 hover:underline">
-            이메일
-          </a>
-        </nav>
+        <div className="space-y-1 leading-5">
+          <p>{KOSMOS_COMPANY.copyright}</p>
+          <p>
+            {KOSMOS_COMPANY.companyNameKo} · 대표번호: {KOSMOS_COMPANY.phone} · 이메일: {KOSMOS_COMPANY.email}
+          </p>
+          <p>주소: {KOSMOS_COMPANY.address}</p>
+          <p>
+            사업자등록번호: {KOSMOS_COMPANY.businessRegistrationNo} · 대표자: {KOSMOS_COMPANY.representative}
+          </p>
+        </div>
       </div>
     </footer>
   );
 }
+
+export default OperatorTabletFooter;

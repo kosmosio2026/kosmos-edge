@@ -26,6 +26,7 @@ interface RealtimeContextValue {
 const RealtimeContext = createContext<RealtimeContextValue | null>(null);
 
 export function RealtimeProvider({ children }: { children: ReactNode }) {
+  const realtimeDebug = process.env.NEXT_PUBLIC_REALTIME_DEBUG === 'true';
   const { session, isAuthenticated, isReady } = useAuth();
 
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -47,24 +48,30 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     setConnected(Boolean(s.connected));
 
     const onConnect = () => {
-      console.info('[realtime] client connected', {
-        id: s.id,
-        namespace: '/realtime',
-        connected: s.connected,
-      });
+      if (realtimeDebug) {
+        console.info('[realtime] client connected', {
+          id: s.id,
+          namespace: '/realtime',
+          connected: s.connected,
+        });
+      }
       setConnected(true);
     };
 
     const onDisconnect = (reason: string) => {
-      console.warn('[realtime] client disconnected', {
-        reason,
-        connected: s.connected,
-      });
+      if (realtimeDebug) {
+        console.warn('[realtime] client disconnected', {
+          reason,
+          connected: s.connected,
+        });
+      }
       setConnected(false);
     };
 
     const onConnectError = (error: Error) => {
-      console.error('[realtime] client connect_error', error);
+      if (realtimeDebug) {
+        console.error('[realtime] client connect_error', error);
+      }
       setConnected(false);
     };
 

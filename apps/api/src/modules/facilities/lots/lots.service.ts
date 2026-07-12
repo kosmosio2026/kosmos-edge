@@ -61,6 +61,16 @@ export class LotsService {
             sections: true,
           },
         },
+        qrCodes: {
+          where: {
+            qrType: 'PARKING_LOT',
+            isActive: true,
+          },
+          orderBy: {
+            createdAt: 'desc',
+          },
+          take: 1,
+        },
       },
     });
   }

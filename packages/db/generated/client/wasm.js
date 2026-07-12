@@ -342,8 +342,6 @@ exports.Prisma.ParkingLotScalarFieldEnum = {
   isActive: 'isActive',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt',
-  sido: 'sido',
-  sigungu: 'sigungu',
   description: 'description',
   operationHours: 'operationHours',
   graceMinutes: 'graceMinutes'
@@ -438,6 +436,7 @@ exports.Prisma.ParkingSessionScalarFieldEnum = {
   metadata: 'metadata',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt',
+  primaryInvoiceId: 'primaryInvoiceId',
   registrationStatus: 'registrationStatus',
   registrationMethod: 'registrationMethod',
   registeredByUserId: 'registeredByUserId',

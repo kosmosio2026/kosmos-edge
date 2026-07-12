@@ -71,6 +71,22 @@ export type UnpaidInvoicesResponse = {
   items: UnpaidInvoiceItem[];
 };
 
+export type InvoicePaymentRequestMessageResponse = {
+  ok: true;
+  invoiceId: string;
+  invoiceNo: string;
+  sessionId: string;
+  customerLabel: string;
+  parkingLotName: string | null;
+  parkingLotLabel: string;
+  usedAt: string | null;
+  usedAtText: string;
+  amount: number;
+  unpaidAmount: number;
+  paymentLinkUrl: string;
+  message: string;
+};
+
 export type InvoicePaymentLinkResponse = {
   ok: true;
   invoiceId: string;
@@ -243,6 +259,27 @@ export async function getUnpaidInvoices(input?: {
 
   return request<UnpaidInvoicesResponse>(
     `/invoices/unpaid${query ? `?${query}` : ''}`,
+  );
+}
+
+export async function createInvoicePaymentRequestMessage(
+  invoiceId: string,
+  input?: {
+    baseUrl?: string;
+  },
+) {
+  return request<InvoicePaymentRequestMessageResponse>(
+    `/invoices/${invoiceId}/payment-request-message`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        baseUrl:
+          input?.baseUrl ??
+          (typeof window !== 'undefined'
+            ? window.location.origin
+            : undefined),
+      }),
+    },
   );
 }
 

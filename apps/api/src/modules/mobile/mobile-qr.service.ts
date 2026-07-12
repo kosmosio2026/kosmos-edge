@@ -65,8 +65,8 @@ export class MobileQrService {
         code: lot.code,
         address: lot.address,
         region: lot.region,
-        sido: lot.sido,
-        sigungu: lot.sigungu,
+        sido: lot.region,
+        sigungu: lot.district,
         district: lot.district,
         lat: lot.lat,
         lng: lot.lng,
@@ -186,6 +186,23 @@ export class MobileQrService {
     const phone = String(dto.phone ?? dto.contactPhone ?? '').trim();
     const vehiclePlateNumber = String(dto.vehiclePlateNumber ?? '').trim();
     const pinCode = String(dto.pinCode ?? '').trim();
+    const hasPinCode = pinCode.length > 0;
+    const visitorPhoneForPinReuse = String(
+      dto.phone ?? dto.contactPhone ?? '',
+    ).trim();
+    const existingVisitorUser = visitorPhoneForPinReuse
+      ? await this.prisma.user.findFirst({
+          where: {
+            phone: visitorPhoneForPinReuse,
+          },
+          include: {
+            visitorProfile: true,
+          },
+        })
+      : null;
+    const canReuseExistingVisitorPin =
+      (dto as any).phoneVerified === true &&
+      Boolean(existingVisitorUser?.visitorProfile?.pinCodeHash);
     const phoneVerificationCode = String(dto.phoneVerificationCode ?? '').trim();
 
     if (!phone) throw new BadRequestException('phone is required');
@@ -195,11 +212,17 @@ export class MobileQrService {
       throw new BadRequestException('phone verification is required');
     }
 
-    if (!/^\d{4,6}$/.test(pinCode)) {
+    if (hasPinCode && !/^\d{4,6}$/.test(pinCode)) {
       throw new BadRequestException('pinCode must be 4 to 6 digits');
     }
 
-    const pinCodeHash = await hash(pinCode, 10);
+    if (!hasPinCode && !canReuseExistingVisitorPin) {
+      throw new BadRequestException('pinCode must be 4 to 6 digits');
+    }
+
+    const pinCodeHash = hasPinCode
+      ? await hash(pinCode, 10)
+      : existingVisitorUser?.visitorProfile?.pinCodeHash ?? '';
 
     const { qr, session } = await this.findRegisterableSession(qrToken, dto.parkingSpaceId);
 

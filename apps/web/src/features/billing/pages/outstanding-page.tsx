@@ -10,18 +10,55 @@ type Props = {
   role?: ConsoleRole;
 };
 
+type CollectionHistoryItem = {
+  action?: string | null;
+  channel?: string | null;
+  recipient?: string | null;
+  note?: string | null;
+  createdAt?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
 type OutstandingItem = {
-  id: string;
+  id?: string | null;
   rowType?: 'INVOICE' | 'SESSION';
+  invoiceId?: string | null;
   invoiceNo?: string | null;
   sessionId?: string | null;
+  sessionNo?: string | null;
+
   amount?: number | null;
   paidAmount?: number | null;
   unpaidAmount?: number | null;
   unpaidFee?: number | null;
   status?: string | null;
+  paymentStatus?: string | null;
+  paymentReason?: string | null;
   createdAt?: string | null;
   paidAt?: string | null;
+  paymentLinkUrl?: string | null;
+  collectionStatus?: string | null;
+  collectionLastAction?: string | null;
+  collectionLastActionAt?: string | null;
+  collectionHistory?: CollectionHistoryItem[] | null;
+
+  plateNumber?: string | null;
+  vehicleNumber?: string | null;
+  driverName?: string | null;
+  userName?: string | null;
+  customerName?: string | null;
+  phone?: string | null;
+  contactPhone?: string | null;
+
+  parkingLotName?: string | null;
+  parkingLotCode?: string | null;
+  parkingSpaceCode?: string | null;
+  parkingSpaceNumber?: string | null;
+  sectionCode?: string | null;
+
+  entryTime?: string | null;
+  exitTime?: string | null;
+
   session?: {
     id: string;
     sessionNo?: string | null;
@@ -30,6 +67,15 @@ type OutstandingItem = {
     unpaidAmount?: number | null;
     entryTime?: string | null;
     exitTime?: string | null;
+    phone?: string | null;
+    contactPhone?: string | null;
+    driverName?: string | null;
+    visitorProfile?: {
+      id?: string | null;
+      phone?: string | null;
+      phoneNumber?: string | null;
+      contactPhone?: string | null;
+    } | null;
     vehicle?: {
       id?: string | null;
       plateNumber?: string | null;
@@ -43,9 +89,11 @@ type OutstandingItem = {
     parkingSpace?: {
       id: string;
       code?: string | null;
+      number?: string | null;
       section?: {
         id: string;
         name?: string | null;
+        code?: string | null;
         parkingLot?: {
           id: string;
           name?: string | null;
@@ -54,6 +102,21 @@ type OutstandingItem = {
       } | null;
     } | null;
   } | null;
+};
+
+type PaymentRequestPreview = {
+  invoiceId: string;
+  invoiceNo: string;
+  sessionId: string;
+  customerLabel: string;
+  parkingLotName: string | null;
+  parkingLotLabel: string;
+  usedAt: string | null;
+  usedAtText: string;
+  amount: number;
+  unpaidAmount: number;
+  paymentLinkUrl: string;
+  message: string;
 };
 
 function unwrapList<T>(value: unknown): T[] {
@@ -92,6 +155,24 @@ function paymentStatusLabel(status?: string | null) {
   }
 }
 
+function statusClassName(status?: string | null) {
+  switch (status) {
+    case 'PAID':
+      return 'bg-green-100 text-green-700';
+    case 'PARTIALLY_PAID':
+      return 'bg-blue-100 text-blue-700';
+    case 'OVERDUE':
+      return 'bg-red-100 text-red-700';
+    case 'UNPAID':
+    case 'ISSUED':
+      return 'bg-orange-100 text-orange-700';
+    case 'UNPAID_SESSION':
+      return 'bg-amber-100 text-amber-700';
+    default:
+      return 'bg-slate-100 text-slate-700';
+  }
+}
+
 function formatDate(value?: string | null) {
   if (!value) return '-';
 
@@ -99,6 +180,11 @@ function formatDate(value?: string | null) {
   if (Number.isNaN(date.getTime())) return value;
 
   return formatKstDateTime(date);
+}
+
+function formatExitDate(item: OutstandingItem) {
+  const value = item.exitTime ?? item.session?.exitTime ?? null;
+  return value ? formatDate(value) : '입차 중';
 }
 
 function getOutstandingAmount(item: OutstandingItem) {
@@ -110,8 +196,24 @@ function getOutstandingAmount(item: OutstandingItem) {
   );
 }
 
+function getInvoiceId(item: OutstandingItem) {
+  if (item.invoiceId) return item.invoiceId;
+
+  if ((item.rowType === 'INVOICE' || item.invoiceNo) && item.id) {
+    return item.id;
+  }
+
+  return null;
+}
+
+function getSessionNo(item: OutstandingItem) {
+  return item.sessionNo ?? item.session?.sessionNo ?? item.sessionId ?? item.session?.id ?? '-';
+}
+
 function getVehicleNumber(item: OutstandingItem) {
   return (
+    item.plateNumber ??
+    item.vehicleNumber ??
     item.session?.vehicle?.plateNumber ??
     item.session?.plateNumber ??
     item.session?.vehicleNumber ??
@@ -121,6 +223,8 @@ function getVehicleNumber(item: OutstandingItem) {
 
 function getParkingLotName(item: OutstandingItem) {
   return (
+    item.parkingLotName ??
+    item.parkingLotCode ??
     item.session?.parkingSpace?.section?.parkingLot?.name ??
     item.session?.parkingSpace?.section?.parkingLot?.code ??
     '-'
@@ -128,44 +232,137 @@ function getParkingLotName(item: OutstandingItem) {
 }
 
 function getSpaceCode(item: OutstandingItem) {
-  return item.session?.parkingSpace?.code ?? '-';
+  const sectionCode =
+    item.sectionCode ??
+    item.session?.parkingSpace?.section?.code ??
+    item.session?.parkingSpace?.section?.name ??
+    null;
+
+  const spaceCode =
+    item.parkingSpaceNumber ??
+    item.parkingSpaceCode ??
+    item.session?.parkingSpace?.number ??
+    item.session?.parkingSpace?.code ??
+    null;
+
+  if (sectionCode && spaceCode) return `${sectionCode} / ${spaceCode}`;
+  return spaceCode ?? sectionCode ?? '-';
 }
 
-function getUserName(item: OutstandingItem) {
+function getContact(item: OutstandingItem) {
   return (
-    item.session?.user?.name ??
-    item.session?.user?.email ??
+    item.phone ??
+    item.contactPhone ??
+    item.session?.visitorProfile?.phone ??
+    item.session?.visitorProfile?.phoneNumber ??
+    item.session?.visitorProfile?.contactPhone ??
+    item.session?.phone ??
+    item.session?.contactPhone ??
     item.session?.user?.phone ??
     '-'
   );
 }
 
-function getDisplayNo(item: OutstandingItem) {
-  if (item.invoiceNo) return item.invoiceNo;
+function getUserName(item: OutstandingItem) {
+  const contact = getContact(item);
 
-  if (item.session?.sessionNo) {
-    return `SESSION-${item.session.sessionNo}`;
+  const rawMemberName =
+    item.session?.user?.name ??
+    item.customerName ??
+    item.userName ??
+    null;
+
+  const normalizedName = rawMemberName ? String(rawMemberName).trim() : '';
+
+  const memberName =
+    normalizedName &&
+    !normalizedName.toLowerCase().startsWith('visitor ') &&
+    normalizedName !== contact
+      ? normalizedName
+      : null;
+
+  if (memberName) return memberName;
+
+  if (contact !== '-') return contact;
+
+  const driverName = item.driverName ?? item.session?.driverName ?? null;
+
+  if (
+    driverName &&
+    !String(driverName).toLowerCase().startsWith('visitor ')
+  ) {
+    return driverName;
   }
 
-  if (item.sessionId) {
-    return `SESSION-${item.sessionId}`;
-  }
-
-  if (item.session?.id) {
-    return `SESSION-${item.session.id}`;
-  }
-
-  return item.id;
+  return item.session?.user?.email ?? '-';
 }
 
 function getDisplayStatus(item: OutstandingItem) {
   if (item.rowType === 'SESSION') return 'UNPAID_SESSION';
 
-  return paymentStatusLabel(item.status);
+  return paymentStatusLabel(item.paymentStatus ?? item.status);
 }
 
 function getCreatedAt(item: OutstandingItem) {
-  return item.createdAt ?? item.session?.entryTime ?? null;
+  return item.createdAt ?? item.entryTime ?? item.session?.entryTime ?? null;
+}
+
+function getEntryAt(item: OutstandingItem) {
+  return item.entryTime ?? item.session?.entryTime ?? null;
+}
+
+function getHistoryItems(item: OutstandingItem): CollectionHistoryItem[] {
+  const history = Array.isArray(item.collectionHistory)
+    ? item.collectionHistory
+    : [];
+
+  if (history.length > 0) return history;
+
+  if (item.collectionLastAction || item.collectionLastActionAt) {
+    return [
+      {
+        action: item.collectionLastAction ?? '-',
+        createdAt: item.collectionLastActionAt ?? null,
+        channel: 'WEB',
+        note: '최근 처리 이력',
+      },
+    ];
+  }
+
+  return [];
+}
+
+async function copyTextToClipboard(text: string) {
+  if (
+    typeof window !== 'undefined' &&
+    window.navigator?.clipboard?.writeText
+  ) {
+    await window.navigator.clipboard.writeText(text);
+    return;
+  }
+
+  if (typeof document === 'undefined') {
+    throw new Error('Clipboard is not available.');
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '-9999px';
+
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  const copied = document.execCommand('copy');
+
+  document.body.removeChild(textarea);
+
+  if (!copied) {
+    throw new Error('복사하지 못했습니다.');
+  }
 }
 
 export default function OutstandingPage({ role = 'admin' }: Props) {
@@ -173,6 +370,17 @@ export default function OutstandingPage({ role = 'admin' }: Props) {
 
   const [items, setItems] = useState<OutstandingItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [busyInvoiceId, setBusyInvoiceId] = useState<string | null>(null);
+  const [selectedDetailItem, setSelectedDetailItem] =
+    useState<OutstandingItem | null>(null);
+  const [selectedHistoryItem, setSelectedHistoryItem] =
+    useState<OutstandingItem | null>(null);
+  const [paymentRequestPreview, setPaymentRequestPreview] =
+    useState<PaymentRequestPreview | null>(null);
+  const [paymentRequestCopied, setPaymentRequestCopied] = useState<
+    'message' | 'link' | null
+  >(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -182,7 +390,7 @@ export default function OutstandingPage({ role = 'admin' }: Props) {
     setError(null);
 
     try {
-      const result = await apiFetch('/billing/outstanding', {
+      const result = await apiFetch('/invoices/unpaid?limit=100', {
         accessToken: session.accessToken,
       });
 
@@ -202,22 +410,134 @@ export default function OutstandingPage({ role = 'admin' }: Props) {
     void load();
   }, [load]);
 
+  async function openPaymentRequestMessage(item: OutstandingItem) {
+    if (!session?.accessToken) return;
+
+    const invoiceId = getInvoiceId(item);
+
+    if (!invoiceId) {
+      setError('이 항목은 청구서 ID가 없어 발송 문구를 생성할 수 없습니다.');
+      return;
+    }
+
+    setBusyInvoiceId(invoiceId);
+    setPaymentRequestCopied(null);
+    setNotice(null);
+    setError(null);
+
+    try {
+      const result = await apiFetch<PaymentRequestPreview>(
+        `/invoices/${invoiceId}/payment-request-message`,
+        {
+          method: 'POST',
+          accessToken: session.accessToken,
+          body: JSON.stringify({
+            baseUrl:
+              typeof window !== 'undefined'
+                ? window.location.origin
+                : undefined,
+          }),
+        },
+      );
+
+      setPaymentRequestPreview(result);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : '미납 청구서 메시지를 생성하지 못했습니다.',
+      );
+    } finally {
+      setBusyInvoiceId(null);
+    }
+  }
+
+  async function recordCopyAction(
+    preview: PaymentRequestPreview,
+    type: 'message' | 'link',
+  ) {
+    if (!session?.accessToken) return;
+
+    await apiFetch(`/invoices/${preview.invoiceId}/collection-action`, {
+      method: 'POST',
+      accessToken: session.accessToken,
+      body: JSON.stringify({
+        action: 'COPY_PAYMENT_LINK',
+        channel: 'WEB',
+        note:
+          type === 'message'
+            ? 'Payment request message copied from console outstanding page'
+            : 'Payment request link copied from console outstanding page',
+        metadata: {
+          paymentLinkUrl: preview.paymentLinkUrl,
+          messageCopied: type === 'message',
+        },
+      }),
+    });
+  }
+
+  async function copyPaymentRequestMessage() {
+    if (!paymentRequestPreview) return;
+
+    try {
+      await copyTextToClipboard(paymentRequestPreview.message);
+      await recordCopyAction(paymentRequestPreview, 'message');
+
+      setPaymentRequestCopied('message');
+      setNotice(`미납 안내 문구를 복사했습니다. (${paymentRequestPreview.invoiceNo})`);
+
+      await load();
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : '미납 안내 문구를 복사하지 못했습니다.',
+      );
+    }
+  }
+
+  async function copyPaymentRequestLink() {
+    if (!paymentRequestPreview) return;
+
+    try {
+      await copyTextToClipboard(paymentRequestPreview.paymentLinkUrl);
+      await recordCopyAction(paymentRequestPreview, 'link');
+
+      setPaymentRequestCopied('link');
+      setNotice(`청구서 링크를 복사했습니다. (${paymentRequestPreview.invoiceNo})`);
+
+      await load();
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : '청구서 링크를 복사하지 못했습니다.',
+      );
+    }
+  }
+
   return (
     <main className="space-y-6 p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">미납</h1>
           <p className="text-sm text-slate-500">
-            Parking Live의 Unpaid Fee와 연동된 미수금 목록을 확인합니다.
+            출차 후 미납된 청구서와 미수금을 확인하고 고객에게 납부 링크를 안내합니다.
           </p>
         </div>
 
         {role === 'operator' ? (
           <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-            View only
+            Operator
           </span>
         ) : null}
       </div>
+
+      {notice ? (
+        <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm font-bold text-blue-700">
+          {notice}
+        </div>
+      ) : null}
 
       {error ? (
         <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -230,71 +550,132 @@ export default function OutstandingPage({ role = 'admin' }: Props) {
       ) : null}
 
       <section className="overflow-x-auto rounded-2xl border bg-white">
-        <table className="w-full min-w-[1100px] text-left text-sm">
-          <thead className="bg-slate-50 text-slate-600">
+        <table className="w-full min-w-[1480px] text-left text-sm">
+          <thead className="bg-slate-50 text-center text-slate-600">
             <tr>
-              <th className="px-4 py-3">번호</th>
-              <th className="px-4 py-3">Invoice / Session</th>
-              <th className="px-4 py-3">Vehicle</th>
-              <th className="px-4 py-3">User</th>
-              <th className="px-4 py-3">주차장</th>
-              <th className="px-4 py-3">주차면</th>
-              <th className="px-4 py-3">Unpaid Fee</th>
-              <th className="px-4 py-3">상태</th>
-              <th className="px-4 py-3">입차일시</th>
-              <th className="px-4 py-3">생성일시</th>
+              <th className="whitespace-nowrap px-4 py-3 text-center">번호</th>
+              <th className="whitespace-nowrap px-4 py-3 text-center">주차장</th>
+              <th className="whitespace-nowrap px-4 py-3 text-center">주차면</th>
+              <th className="whitespace-nowrap px-4 py-3 text-center">차량번호</th>
+              <th className="whitespace-nowrap px-4 py-3 text-center">이용자</th>
+              <th className="whitespace-nowrap px-4 py-3 text-center">연락처</th>
+              <th className="whitespace-nowrap px-4 py-3 text-center">미납액</th>
+              <th className="w-28 whitespace-nowrap px-4 py-3 text-center">상태</th>
+              <th className="whitespace-nowrap px-4 py-3 text-center">입차일시</th>
+              <th className="whitespace-nowrap px-4 py-3 text-center">출차일시</th>
+              <th className="whitespace-nowrap px-4 py-3 text-center">생성일시</th>
+              <th className="w-[320px] whitespace-nowrap px-4 py-3 text-center">작업</th>
             </tr>
           </thead>
 
           <tbody>
-            {items.map((item, index) => (
-              <tr key={item.id} className="border-t">
-                <td className="px-4 py-3">{index + 1}</td>
+            {items.map((item, index) => {
+              const invoiceId = getInvoiceId(item);
+              const busy = invoiceId ? busyInvoiceId === invoiceId : false;
+              const outstandingAmount = getOutstandingAmount(item);
+              const rowKey = invoiceId ?? item.id ?? `${item.sessionId ?? 'row'}-${index}`;
 
-                <td className="px-4 py-3">
-                  {getDisplayNo(item)}
-                </td>
+              return (
+                <tr key={rowKey} className="border-t align-middle">
+                  <td className="whitespace-nowrap px-4 py-3 text-center">
+                    <button
+                      onClick={() => setSelectedDetailItem(item)}
+                      className="rounded-lg px-2 py-1 font-bold text-blue-700 hover:bg-blue-50 hover:underline"
+                      title="청구서 상세 보기"
+                    >
+                      {index + 1}
+                    </button>
+                  </td>
 
-                <td className="px-4 py-3">
-                  {getVehicleNumber(item)}
-                </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {getParkingLotName(item)}
+                  </td>
 
-                <td className="px-4 py-3">
-                  {getUserName(item)}
-                </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {getSpaceCode(item)}
+                  </td>
 
-                <td className="px-4 py-3">
-                  {getParkingLotName(item)}
-                </td>
+                  <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-900">
+                    {getVehicleNumber(item)}
+                  </td>
 
-                <td className="px-4 py-3">
-                  {getSpaceCode(item)}
-                </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {getUserName(item)}
+                  </td>
 
-                <td className="px-4 py-3 font-semibold text-red-600">
-                  {formatCurrency(getOutstandingAmount(item))}
-                </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {getContact(item)}
+                  </td>
 
-                <td className="px-4 py-3">
-                  <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
-                    {getDisplayStatus(item)}
-                  </span>
-                </td>
+                  <td className="whitespace-nowrap px-4 py-3 font-semibold text-red-600">
+                    {formatCurrency(outstandingAmount)}
+                  </td>
 
-                <td className="px-4 py-3">
-                  {formatDate(item.session?.entryTime)}
-                </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-center">
+                    <span
+                      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${statusClassName(
+                        item.rowType === 'SESSION'
+                          ? 'UNPAID_SESSION'
+                          : item.paymentStatus ?? item.status,
+                      )}`}
+                    >
+                      {getDisplayStatus(item)}
+                    </span>
+                  </td>
 
-                <td className="px-4 py-3">
-                  {formatDate(getCreatedAt(item))}
-                </td>
-              </tr>
-            ))}
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {formatDate(getEntryAt(item))}
+                  </td>
+
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {formatExitDate(item)}
+                  </td>
+
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {formatDate(getCreatedAt(item))}
+                  </td>
+
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {invoiceId ? (
+                      <div className="flex min-w-max items-center justify-center gap-2 whitespace-nowrap">
+                        <button
+                          disabled={busy || outstandingAmount <= 0}
+                          onClick={() => openPaymentRequestMessage(item)}
+                          className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {busy ? '생성 중' : '청구서 보내기'}
+                        </button>
+
+                        <a
+                          href={`/pay/invoice/${invoiceId}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-center text-xs font-bold text-slate-700 hover:bg-slate-50"
+                        >
+                          청구서 조회
+                        </a>
+
+                        <button
+                          onClick={() => setSelectedHistoryItem(item)}
+                          className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100"
+                        >
+                          이력 보기
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-400">
+                        청구서 확인 필요
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
 
             {!loading && items.length === 0 ? (
               <tr>
                 <td
-                  colSpan={10}
+                  colSpan={12}
                   className="px-4 py-10 text-center text-slate-500"
                 >
                   미납 청구서가 없습니다.
@@ -304,6 +685,260 @@ export default function OutstandingPage({ role = 'admin' }: Props) {
           </tbody>
         </table>
       </section>
+
+      {selectedDetailItem ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+          <div className="w-full max-w-3xl rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-bold text-blue-600">
+                  청구서 상세
+                </p>
+                <h2 className="mt-1 text-2xl font-black text-slate-950">
+                  {selectedDetailItem.invoiceNo ?? '미납 세션'}
+                </h2>
+              </div>
+
+              <button
+                onClick={() => setSelectedDetailItem(null)}
+                className="rounded-full border border-slate-200 px-3 py-1 text-sm font-bold text-slate-600 hover:bg-slate-50"
+              >
+                닫기
+              </button>
+            </div>
+
+            <div className="grid gap-3 text-sm md:grid-cols-2">
+              <DetailItem label="청구서 ID" value={getInvoiceId(selectedDetailItem) ?? '-'} />
+              <DetailItem label="세션" value={getSessionNo(selectedDetailItem)} />
+              <DetailItem label="주차장" value={getParkingLotName(selectedDetailItem)} />
+              <DetailItem label="주차면" value={getSpaceCode(selectedDetailItem)} />
+              <DetailItem label="차량번호" value={getVehicleNumber(selectedDetailItem)} />
+              <DetailItem label="이용자" value={getUserName(selectedDetailItem)} />
+              <DetailItem label="연락처" value={getContact(selectedDetailItem)} />
+              <DetailItem label="미납액" value={formatCurrency(getOutstandingAmount(selectedDetailItem))} />
+              <DetailItem label="상태" value={getDisplayStatus(selectedDetailItem)} />
+              <DetailItem label="입차일시" value={formatDate(getEntryAt(selectedDetailItem))} />
+              <DetailItem label="출차일시" value={formatExitDate(selectedDetailItem)} />
+              <DetailItem label="생성일시" value={formatDate(getCreatedAt(selectedDetailItem))} />
+              <DetailItem label="결제일시" value={formatDate(selectedDetailItem.paidAt)} />
+              <DetailItem label="청구금액" value={formatCurrency(selectedDetailItem.amount)} />
+              <DetailItem label="결제금액" value={formatCurrency(selectedDetailItem.paidAmount)} />
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              {getInvoiceId(selectedDetailItem) ? (
+                <a
+                  href={`/pay/invoice/${getInvoiceId(selectedDetailItem)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100"
+                >
+                  청구서 조회
+                </a>
+              ) : null}
+              <button
+                onClick={() => setSelectedDetailItem(null)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {selectedHistoryItem ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+          <div className="w-full max-w-4xl rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-bold text-blue-600">
+                  청구 이력
+                </p>
+                <h2 className="mt-1 text-2xl font-black text-slate-950">
+                  {selectedHistoryItem.invoiceNo ?? getInvoiceId(selectedHistoryItem) ?? '미납 청구서'}
+                </h2>
+                <p className="mt-2 text-sm text-slate-500">
+                  청구서 링크 생성, 복사, 문자/이메일 발송 등 수금 처리 이력을 확인합니다.
+                </p>
+              </div>
+
+              <button
+                onClick={() => setSelectedHistoryItem(null)}
+                className="rounded-full border border-slate-200 px-3 py-1 text-sm font-bold text-slate-600 hover:bg-slate-50"
+              >
+                닫기
+              </button>
+            </div>
+
+            {getHistoryItems(selectedHistoryItem).length > 0 ? (
+              <div className="overflow-x-auto rounded-2xl border border-slate-200">
+                <table className="w-full min-w-[760px] text-left text-sm">
+                  <thead className="bg-slate-50 text-center text-slate-600">
+                    <tr>
+                      <th className="whitespace-nowrap px-4 py-3 text-center">일시</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-center">작업</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-center">채널</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-center">수신자</th>
+                      <th className="whitespace-nowrap px-4 py-3 text-center">메모</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {getHistoryItems(selectedHistoryItem).map((history, index) => (
+                      <tr key={`${history.action ?? 'ACTION'}-${history.createdAt ?? index}`} className="border-t">
+                        <td className="whitespace-nowrap px-4 py-3">
+                          {formatDate(history.createdAt)}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-900">
+                          {history.action ?? '-'}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3">
+                          {history.channel ?? '-'}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3">
+                          {history.recipient ?? '-'}
+                        </td>
+                        <td className="px-4 py-3">
+                          {history.note ?? '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
+                청구 이력이 없습니다.
+              </div>
+            )}
+
+            <div className="mt-5 flex justify-end">
+              <button
+                onClick={() => setSelectedHistoryItem(null)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {paymentRequestPreview ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+          <div className="w-full max-w-3xl rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-bold text-amber-600">
+                  미납 청구서 보내기
+                </p>
+                <h2 className="mt-1 text-2xl font-black text-slate-950">
+                  안내 문구 확인
+                </h2>
+                <p className="mt-2 text-sm text-slate-500">
+                  아래 문구를 복사해 문자메시지 또는 메신저로 고객에게 전달할 수 있습니다.
+                  이메일 발송 기능은 추후 제공됩니다.
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  setPaymentRequestPreview(null);
+                  setPaymentRequestCopied(null);
+                }}
+                className="rounded-full border border-slate-200 px-3 py-1 text-sm font-bold text-slate-600 hover:bg-slate-50"
+              >
+                닫기
+              </button>
+            </div>
+
+            <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm md:grid-cols-2">
+              <div>
+                <p className="text-xs font-bold text-slate-400">청구서</p>
+                <p className="mt-1 font-semibold text-slate-900">
+                  {paymentRequestPreview.invoiceNo}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-400">고객</p>
+                <p className="mt-1 font-semibold text-slate-900">
+                  {paymentRequestPreview.customerLabel}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-400">이용 주차장</p>
+                <p className="mt-1 font-semibold text-slate-900">
+                  {paymentRequestPreview.parkingLotLabel}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-400">미납 금액</p>
+                <p className="mt-1 font-semibold text-red-700">
+                  {formatCurrency(paymentRequestPreview.unpaidAmount)}
+                </p>
+              </div>
+            </div>
+
+            <label className="mt-5 block text-sm font-bold text-slate-700">
+              발송 문구
+            </label>
+            <textarea
+              readOnly
+              value={paymentRequestPreview.message}
+              className="mt-2 h-56 w-full rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-900 outline-none"
+            />
+
+            <div className="mt-3 rounded-2xl border border-blue-100 bg-blue-50 p-3 text-sm">
+              <p className="font-bold text-blue-800">청구서 링크</p>
+              <a
+                href={paymentRequestPreview.paymentLinkUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-1 block break-all text-blue-700 underline"
+              >
+                {paymentRequestPreview.paymentLinkUrl}
+              </a>
+            </div>
+
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                onClick={copyPaymentRequestMessage}
+                className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-700"
+              >
+                {paymentRequestCopied === 'message'
+                  ? '문구 복사됨'
+                  : '문구 복사'}
+              </button>
+              <button
+                onClick={copyPaymentRequestLink}
+                className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100"
+              >
+                {paymentRequestCopied === 'link'
+                  ? '링크 복사됨'
+                  : '링크 복사'}
+              </button>
+              <button
+                onClick={() => {
+                  setPaymentRequestPreview(null);
+                  setPaymentRequestCopied(null);
+                }}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
+  );
+}
+
+function DetailItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+      <p className="text-xs font-bold text-slate-400">{label}</p>
+      <p className="mt-1 break-all font-semibold text-slate-900">{value}</p>
+    </div>
   );
 }

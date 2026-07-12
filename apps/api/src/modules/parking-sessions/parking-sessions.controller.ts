@@ -30,27 +30,16 @@ export class ParkingSessionsController {
   }
 
   @Get()
-  async getSessions(
+  getSessions(
     @CurrentUser() user: AuthUser,
     @Query('parkingLotId') parkingLotId?: string,
     @Query('status') status?: string,
   ) {
-    try {
-      return await this.parkingSessionsService.getSessions({
-        user,
-        parkingLotId,
-        status,
-      });
-    } catch (error) {
-      console.error('[parking-sessions.getSessions] failed', {
-        userId: user?.sub,
-        roles: user?.roles,
-        parkingLotId,
-        status,
-        error,
-      });
-      throw error;
-    }
+    return this.parkingSessionsService.getSessions({
+      user,
+      parkingLotId,
+      status,
+    });
   }
 
 

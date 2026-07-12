@@ -91,7 +91,19 @@ type BillingSummary = {
 };
 
 const PAGE_SIZE = 10;
-const DEFAULT_REGION = 'SEOUL';
+const DEFAULT_REGION = 'ALL';
+
+function getRegionFilterLabel(region: string) {
+  return region === DEFAULT_REGION ? '지역' : region;
+}
+
+function matchesSelectedRegion(
+  lotRegion: string | null | undefined,
+  selectedRegion: string,
+) {
+  if (selectedRegion === DEFAULT_REGION) return true;
+  return normalizeRegion(lotRegion) === selectedRegion;
+}
 
 function toArray<T>(value: unknown): T[] {
   if (Array.isArray(value)) return value as T[];
@@ -182,14 +194,31 @@ export default function DashboardPage({ role = 'admin' }: Props) {
 
     setError(null);
 
-    const results = await Promise.allSettled([
-      fetchParkingLots(session.accessToken),
-      fetchBillingSummary(session.accessToken),
-      fetchDisplayBoards(session.accessToken),
-      apiFetch('/facilities/spaces', {
-        accessToken: session.accessToken,
-      }),
-    ]);
+    const dashboardEndpoints = [
+      {
+        label: 'parking lots',
+        run: () => fetchParkingLots(session.accessToken),
+      },
+      {
+        label: 'billing summary',
+        run: () => fetchBillingSummary(session.accessToken),
+      },
+      {
+        label: 'display boards',
+        run: () => fetchDisplayBoards(session.accessToken),
+      },
+      {
+        label: 'facilities spaces',
+        run: () =>
+          apiFetch('/facilities/spaces', {
+            accessToken: session.accessToken,
+          }),
+      },
+    ];
+
+    const results = await Promise.allSettled(
+      dashboardEndpoints.map((endpoint) => endpoint.run()),
+    );
 
     const [lotsResult, billingResult, displayResult, spacesResult] = results;
 
@@ -212,7 +241,25 @@ export default function DashboardPage({ role = 'admin' }: Props) {
     const failedCount = results.filter((r) => r.status === 'rejected').length;
 
     if (failedCount > 0) {
-      setError(`${failedCount} dashboard endpoint(s) failed.`);
+      const failedDetails = results
+        .map((result, index) => ({
+          result,
+          endpoint: dashboardEndpoints[index],
+        }))
+        .filter(({ result }) => result.status === 'rejected')
+        .map(({ result, endpoint }) => {
+          if (result.status !== 'rejected') return endpoint.label;
+
+          const reason =
+            result.reason instanceof Error
+              ? result.reason.message
+              : String(result.reason);
+
+          return `${endpoint.label}: ${reason}`;
+        })
+        .join(' / ');
+
+      setError(`${failedCount} dashboard endpoint(s) failed. ${failedDetails}`);
     }
   }, [session?.accessToken]);
 
@@ -322,15 +369,15 @@ export default function DashboardPage({ role = 'admin' }: Props) {
   }, [billing]);
 
   const capacityLots = useMemo(() => {
-    return lots.filter((lot) => normalizeRegion(lot.region) === capacityRegion);
+    return lots.filter((lot) => matchesSelectedRegion(lot.region, capacityRegion));
   }, [lots, capacityRegion]);
 
   const displayLots = useMemo(() => {
-    return lots.filter((lot) => normalizeRegion(lot.region) === displayRegion);
+    return lots.filter((lot) => matchesSelectedRegion(lot.region, displayRegion));
   }, [lots, displayRegion]);
 
   const mapLots = useMemo(() => {
-    return lots.filter((lot) => normalizeRegion(lot.region) === mapRegion);
+    return lots.filter((lot) => matchesSelectedRegion(lot.region, mapRegion));
   }, [lots, mapRegion]);
 
   const capacityPageCount = getPageCount(capacityLots.length);
@@ -481,7 +528,7 @@ export default function DashboardPage({ role = 'admin' }: Props) {
             </ResponsiveContainer>
           </div>
         ) : (
-          <EmptyBox message="No parking lot data." />
+          <EmptyBox message="주차장 없음 data." />
         )}
       </section>
 
@@ -595,7 +642,7 @@ export default function DashboardPage({ role = 'admin' }: Props) {
 
               {mapLots.length === 0 ? (
                 <div className="rounded-2xl bg-white p-8 text-center text-sm text-slate-500 md:col-span-2">
-                  No parking lots in this region.
+                  주차장 없음 in this region.
                 </div>
               ) : null}
             </div>
@@ -640,7 +687,7 @@ export default function DashboardPage({ role = 'admin' }: Props) {
               </div>
             ) : (
               <div className="flex h-[320px] items-center justify-center rounded-2xl bg-slate-50 text-sm text-slate-500">
-                No parking lot selected.
+                주차장 없음 selected.
               </div>
             )}
           </div>
@@ -676,7 +723,7 @@ function RegionSelect({
     >
       {regions.map((region) => (
         <option key={region} value={region}>
-          {region}
+          {getRegionFilterLabel(region)}
         </option>
       ))}
     </select>

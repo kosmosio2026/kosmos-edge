@@ -80,7 +80,7 @@ export default function BillingSummaryPage({ role = 'admin' }: Props) {
       </section>
 
       <section className="rounded-3xl border bg-white p-6 shadow-sm">
-        <h2 className="mb-5 text-lg font-semibold">Settlement Snapshot</h2>
+        <h2 className="mb-5 text-lg font-semibold">정산 요약</h2>
 
         <div className="grid gap-4 md:grid-cols-3">
           <Metric label="Invoices" value={summary?.invoiceCount ?? 0} />

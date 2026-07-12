@@ -60,15 +60,14 @@ export function MobileAppShell({
           { href: '/mobile', label: '홈', icon: '⌂' },
           { href: '/mobile/parking/select', label: '주차등록', icon: '＋' },
           { href: '/mobile/parking/current', label: '주차현황', icon: '●' },
-          { href: '/mobile/payments', label: '결제/영수증', icon: '₩' },
-          { href: '/mobile/member/vehicles', label: '내차량', icon: '▣' },
+          { href: '/mobile/payments', label: '요금결제', icon: '₩' },
         ]
       : effectiveSessionType === 'visitor'
         ? [
             { href: '/mobile', label: '홈', icon: '⌂' },
             { href: '/mobile/parking/select', label: '주차등록', icon: '＋' },
             { href: '/mobile/parking/current', label: '주차현황', icon: '●' },
-            { href: '/mobile/payments', label: '결제/영수증', icon: '₩' },
+            { href: '/mobile/payments', label: '요금결제', icon: '₩' },
             { href: '/mobile/visitor/history', label: '주차이력', icon: '≡' },
           ]
         : [
@@ -121,8 +120,8 @@ export function MobileAppShell({
                   <a href="/mobile/member/profile" className="rounded-2xl bg-white px-4 py-3 text-slate-800">
                     내 정보
                   </a>
-                  <a href="/mobile/member/vehicles" className="rounded-2xl bg-white px-4 py-3 text-slate-800">
-                    내 차량
+                  <a href="/mobile/payments" className="rounded-2xl bg-white px-4 py-3 text-slate-800 font-bold text-blue-700">
+                    요금 결제
                   </a>
                   <a href="/mobile/member/history" className="rounded-2xl bg-white px-4 py-3 text-slate-800">
                     주차 이력
@@ -147,7 +146,7 @@ export function MobileAppShell({
                     주차 이력
                   </a>
                   <a href="/mobile/payments" className="rounded-2xl bg-white px-4 py-3 text-slate-800">
-                    결제/영수증
+                    요금 결제
                   </a>
                   <button
                     type="button"
@@ -207,7 +206,19 @@ export function MobileAppShell({
               위치기반서비스
             </a>
           </div>
-        </footer>
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500" data-kosmos-legal-links>
+  <a href="/terms" className="hover:text-slate-900">이용약관</a>
+  <a href="/privacy" className="hover:text-slate-900">개인정보처리방침</a>
+  <a href="/location-terms" className="hover:text-slate-900">위치정보 이용약관</a>
+  <a href="/electronic-finance-terms" className="hover:text-slate-900">전자금융거래 이용약관</a>
+</div>
+<div className="mt-3 space-y-1 text-xs leading-5 text-slate-500" data-kosmos-company-info>
+  <p>© 2026 KOSMOS Co., Ltd. All rights reserved.</p>
+  <p>코스모스 주식회사 · 대표번호: 010-2983-1136 · 이메일: admin@kosmos.io.kr</p>
+  <p>주소: 전라남도 화순군 화순읍 홍문길 4</p>
+  <p>사업자등록번호: 507-81-17904 · 대표자: 윤도영</p>
+</div>
+</footer>
       </div>
 
       <nav

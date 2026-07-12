@@ -21,6 +21,8 @@ export class RealtimeGateway
   @WebSocketServer()
   server!: Server;
 
+  private readonly debug = process.env.REALTIME_DEBUG === 'true';
+
   private sub = new Redis();
 
   afterInit() {
@@ -35,12 +37,14 @@ export class RealtimeGateway
   }
 
   handleConnection(client: Socket) {
-    console.log('[realtime] client connected', {
-      id: client.id,
-      namespace: client.nsp.name,
-      origin: client.handshake.headers.origin,
-      hasToken: Boolean(client.handshake.auth?.token),
-    });
+    if (this.debug) {
+      console.log('[realtime] client connected', {
+        id: client.id,
+        namespace: client.nsp.name,
+        origin: client.handshake.headers.origin,
+        hasToken: Boolean(client.handshake.auth?.token),
+      });
+    }
 
     client.emit('connected', {
       ok: true,
@@ -50,10 +54,12 @@ export class RealtimeGateway
   }
 
   handleDisconnect(client: Socket) {
-    console.log('[realtime] client disconnected', {
-      id: client.id,
-      namespace: client.nsp.name,
-    });
+    if (this.debug) {
+      console.log('[realtime] client disconnected', {
+        id: client.id,
+        namespace: client.nsp.name,
+      });
+    }
   }
 
   emit(type: string, payload: any) {

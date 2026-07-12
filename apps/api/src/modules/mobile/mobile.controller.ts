@@ -122,20 +122,29 @@ export class MobileController {
 
   @UseGuards(JwtAuthGuard)
   @Get('parking/current')
-  getCurrentParking(@CurrentUser() user: AuthUser) {
-    return this.mobileParkingService.getCurrentParking(user);
+  getCurrentParking(
+    @CurrentUser() user: AuthUser,
+    @Query('sessionId') sessionId?: string,
+  ) {
+    return this.mobileParkingService.getCurrentParking(user, sessionId);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get('parking/current/fee-preview')
-  previewCurrentFee(@CurrentUser() user: AuthUser) {
-    return this.mobileParkingService.previewCurrentFee(user);
+  previewCurrentFee(
+    @CurrentUser() user: AuthUser,
+    @Query('sessionId') sessionId?: string,
+  ) {
+    return this.mobileParkingService.previewCurrentFee(user, sessionId);
   }
 
   @UseGuards(JwtAuthGuard)
   @Post('parking/current/finalize-invoice')
-  finalizeCurrentInvoice(@CurrentUser() user: AuthUser) {
-    return this.mobileParkingService.finalizeCurrentInvoice(user);
+  finalizeCurrentInvoice(
+    @CurrentUser() user: AuthUser,
+    @Query('sessionId') sessionId?: string,
+  ) {
+    return this.mobileParkingService.finalizeCurrentInvoice(user, sessionId);
   }
 
 

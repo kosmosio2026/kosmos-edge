@@ -745,8 +745,6 @@ model ParkingLot {
   ManagerParkingLot      ManagerParkingLot[]
   OperatorParkingSection OperatorParkingSection[]
   displayBoard           DisplayBoard?
-  sido                   String?
-  sigungu                String?
   description            String?
   operationHours         Json?
   graceMinutes           Int                      @default(10)
@@ -921,7 +919,9 @@ model ParkingSession {
   feePolicy FeePolicy? @relation(fields: [feePolicyId], references: [id], onDelete: SetNull)
 
   events                                   ParkingSessionEvent[]
-  invoice                                  Invoice?
+  primaryInvoiceId                        String?                                  @unique
+  invoice                                  Invoice?                                  @relation("ParkingSessionPrimaryInvoice", fields: [primaryInvoiceId], references: [id], onDelete: SetNull)
+  invoices                                 Invoice[]                                 @relation("ParkingSessionInvoices")
   receipts                                 Receipt[]
   ParkingSpace                             ParkingSpace?                            @relation(fields: [parkingSpaceId], references: [id])
   registrationStatus                       RegistrationStatus                       @default(UNREGISTERED)
@@ -966,7 +966,7 @@ model ParkingSessionEvent {
 model Invoice {
   id        String @id @default(cuid())
   invoiceNo String @unique
-  sessionId String @unique
+  sessionId String
 
   status InvoiceStatus @default(DRAFT)
 
@@ -990,11 +990,13 @@ model Invoice {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  session        ParkingSession         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session        ParkingSession         @relation("ParkingSessionInvoices", fields: [sessionId], references: [id], onDelete: Cascade)
+  primaryForSession ParkingSession? @relation("ParkingSessionPrimaryInvoice")
   payments       Payment[]
   receipts       Receipt[]
   manualPayments InvoiceManualPayment[]
 
+  @@index([sessionId])
   @@index([status])
   @@index([createdAt])
 }

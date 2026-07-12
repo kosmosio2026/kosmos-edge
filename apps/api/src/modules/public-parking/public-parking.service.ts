@@ -11,22 +11,20 @@ export class PublicParkingService {
       select: {
         region: true,
         district: true,
-        sido: true,
-        sigungu: true,
       },
       orderBy: [
         { region: 'asc' },
         { district: 'asc' },
-        { sido: 'asc' },
-        { sigungu: 'asc' },
+        { region: 'asc' },
+        { district: 'asc' },
       ],
     });
 
     const map = new Map<string, Set<string>>();
 
     for (const lot of lots) {
-      const region = lot.region || lot.sido || '미지정';
-      const district = lot.district || lot.sigungu || '미지정';
+      const region = lot.region || '미지정';
+      const district = lot.district || '미지정';
 
       if (!map.has(region)) map.set(region, new Set());
       map.get(region)!.add(district);
@@ -52,12 +50,12 @@ export class PublicParkingService {
         isActive: true,
         ...(region
           ? {
-              OR: [{ region }, { sido: region }],
+              region,
             }
           : {}),
         ...(district
           ? {
-              OR: [{ district }, { sigungu: district }],
+              district,
             }
           : {}),
       },
@@ -67,8 +65,6 @@ export class PublicParkingService {
         code: true,
         region: true,
         district: true,
-        sido: true,
-        sigungu: true,
         address: true,
         lat: true,
         lng: true,
@@ -89,8 +85,8 @@ export class PublicParkingService {
     });
 
     return lots.map((lot) => {
-      const normalizedRegion = lot.region || lot.sido || null;
-      const normalizedDistrict = lot.district || lot.sigungu || null;
+      const normalizedRegion = lot.region || null;
+      const normalizedDistrict = lot.district || null;
 
       return {
         id: lot.id,

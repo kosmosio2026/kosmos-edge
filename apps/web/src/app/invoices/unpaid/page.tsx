@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import {
   clearTokens,
   createInvoicePaymentLink,
+  createInvoicePaymentRequestMessage,
   getAccessToken,
   getUnpaidInvoices,
   mockCompletePayment,
@@ -152,6 +153,18 @@ type Notice = {
   paymentLinkUrl?: string | null;
 };
 
+type PaymentRequestPreview = {
+  invoiceId: string;
+  invoiceNo: string;
+  customerLabel: string;
+  parkingLotLabel: string;
+  usedAtText: string;
+  amount: number;
+  unpaidAmount: number;
+  paymentLinkUrl: string;
+  message: string;
+};
+
 export default function UnpaidInvoicesPage() {
   const router = useRouter();
 
@@ -161,6 +174,11 @@ export default function UnpaidInvoicesPage() {
   const [busyInvoiceId, setBusyInvoiceId] = useState<string | null>(null);
   const [copiedInvoiceId, setCopiedInvoiceId] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [paymentRequestPreview, setPaymentRequestPreview] =
+    useState<PaymentRequestPreview | null>(null);
+  const [paymentRequestCopied, setPaymentRequestCopied] = useState<
+    'message' | 'link' | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
 
   const totalUnpaidAmount = useMemo(() => {
@@ -337,7 +355,102 @@ export default function UnpaidInvoicesPage() {
     }
   }
 
-    async function onSendEmail(item: UnpaidInvoiceItem) {
+  async function onOpenPaymentRequestMessage(item: UnpaidInvoiceItem) {
+    setBusyInvoiceId(item.invoiceId);
+    setPaymentRequestCopied(null);
+
+    try {
+      const result = await createInvoicePaymentRequestMessage(item.invoiceId, {
+        baseUrl:
+          typeof window !== 'undefined' ? window.location.origin : undefined,
+      });
+
+      setPaymentRequestPreview({
+        invoiceId: result.invoiceId,
+        invoiceNo: result.invoiceNo,
+        customerLabel: result.customerLabel,
+        parkingLotLabel: result.parkingLotLabel,
+        usedAtText: result.usedAtText,
+        amount: result.amount,
+        unpaidAmount: result.unpaidAmount,
+        paymentLinkUrl: result.paymentLinkUrl,
+        message: result.message,
+      });
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : '미납 청구서 메시지를 생성하지 못했습니다.',
+      );
+    } finally {
+      setBusyInvoiceId(null);
+    }
+  }
+
+  async function onCopyPaymentRequestMessage() {
+    if (!paymentRequestPreview) return;
+
+    try {
+      await copyTextToClipboard(paymentRequestPreview.message);
+
+      await recordInvoiceCollectionAction(paymentRequestPreview.invoiceId, {
+        action: 'COPY_PAYMENT_LINK',
+        channel: 'WEB',
+        note: 'Payment request message copied from unpaid invoice page',
+        metadata: {
+          paymentLinkUrl: paymentRequestPreview.paymentLinkUrl,
+          messageCopied: true,
+        },
+      });
+
+      setPaymentRequestCopied('message');
+      setNotice({
+        message: `미납 안내 문구를 복사했습니다. (${paymentRequestPreview.invoiceNo})`,
+        paymentLinkUrl: paymentRequestPreview.paymentLinkUrl,
+      });
+
+      await load();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : '미납 안내 문구를 복사하지 못했습니다.',
+      );
+    }
+  }
+
+  async function onCopyPaymentRequestLink() {
+    if (!paymentRequestPreview) return;
+
+    try {
+      await copyTextToClipboard(paymentRequestPreview.paymentLinkUrl);
+
+      await recordInvoiceCollectionAction(paymentRequestPreview.invoiceId, {
+        action: 'COPY_PAYMENT_LINK',
+        channel: 'WEB',
+        note: 'Payment request link copied from unpaid invoice page',
+        metadata: {
+          paymentLinkUrl: paymentRequestPreview.paymentLinkUrl,
+        },
+      });
+
+      setPaymentRequestCopied('link');
+      setNotice({
+        message: `청구서 링크를 복사했습니다. (${paymentRequestPreview.invoiceNo})`,
+        paymentLinkUrl: paymentRequestPreview.paymentLinkUrl,
+      });
+
+      await load();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : '청구서 링크를 복사하지 못했습니다.',
+      );
+    }
+  }
+
+  async function onSendEmail(item: UnpaidInvoiceItem) {
     setBusyInvoiceId(item.invoiceId);
 
     try {
@@ -684,6 +797,14 @@ export default function UnpaidInvoicesPage() {
                             </button>
 
                             <button
+                              disabled={busy || item.unpaidAmount <= 0}
+                              onClick={() => onOpenPaymentRequestMessage(item)}
+                              className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              미납 청구서 보내기
+                            </button>
+
+                            <button
                               disabled={busy}
                               onClick={() => onSendSms(item)}
                               className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
@@ -709,6 +830,112 @@ export default function UnpaidInvoicesPage() {
           </div>
         )}
       </div>
+      {paymentRequestPreview ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+          <div className="w-full max-w-3xl rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-bold text-amber-600">
+                  미납 청구서 보내기
+                </p>
+                <h2 className="mt-1 text-2xl font-black text-slate-950">
+                  안내 문구 확인
+                </h2>
+                <p className="mt-2 text-sm text-slate-500">
+                  아래 문구를 복사해 문자메시지 또는 메신저로 고객에게 전달할 수 있습니다.
+                  이메일 발송 기능은 추후 제공됩니다.
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  setPaymentRequestPreview(null);
+                  setPaymentRequestCopied(null);
+                }}
+                className="rounded-full border border-slate-200 px-3 py-1 text-sm font-bold text-slate-600 hover:bg-slate-50"
+              >
+                닫기
+              </button>
+            </div>
+
+            <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm md:grid-cols-2">
+              <div>
+                <p className="text-xs font-bold text-slate-400">청구서</p>
+                <p className="mt-1 font-semibold text-slate-900">
+                  {paymentRequestPreview.invoiceNo}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-400">고객</p>
+                <p className="mt-1 font-semibold text-slate-900">
+                  {paymentRequestPreview.customerLabel}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-400">이용 주차장</p>
+                <p className="mt-1 font-semibold text-slate-900">
+                  {paymentRequestPreview.parkingLotLabel}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-400">미납 금액</p>
+                <p className="mt-1 font-semibold text-red-700">
+                  {formatCurrency(paymentRequestPreview.unpaidAmount)}
+                </p>
+              </div>
+            </div>
+
+            <label className="mt-5 block text-sm font-bold text-slate-700">
+              발송 문구
+            </label>
+            <textarea
+              readOnly
+              value={paymentRequestPreview.message}
+              className="mt-2 h-56 w-full rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-6 text-slate-900 outline-none"
+            />
+
+            <div className="mt-3 rounded-2xl border border-blue-100 bg-blue-50 p-3 text-sm">
+              <p className="font-bold text-blue-800">청구서 링크</p>
+              <a
+                href={paymentRequestPreview.paymentLinkUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-1 block break-all text-blue-700 underline"
+              >
+                {paymentRequestPreview.paymentLinkUrl}
+              </a>
+            </div>
+
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                onClick={onCopyPaymentRequestMessage}
+                className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-700"
+              >
+                {paymentRequestCopied === 'message'
+                  ? '문구 복사됨'
+                  : '문구 복사'}
+              </button>
+              <button
+                onClick={onCopyPaymentRequestLink}
+                className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100"
+              >
+                {paymentRequestCopied === 'link'
+                  ? '링크 복사됨'
+                  : '링크 복사'}
+              </button>
+              <button
+                onClick={() => {
+                  setPaymentRequestPreview(null);
+                  setPaymentRequestCopied(null);
+                }}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

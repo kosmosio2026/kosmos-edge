@@ -24,6 +24,20 @@ function formatMoney(value?: number | string | null) {
   return `${num.toLocaleString('ko-KR')}원`;
 }
 
+function pickAmount(...values: unknown[]) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === '') continue;
+
+    const numberValue = Number(value);
+
+    if (!Number.isNaN(numberValue)) {
+      return numberValue;
+    }
+  }
+
+  return null;
+}
+
 function statusLabel(status?: string | null) {
   switch (status) {
     case 'PAID':
@@ -221,7 +235,29 @@ export default function PublicInvoicePage() {
     return [lot, section, space].filter(Boolean).join(' · ') || '-';
   }, [data, invoice, session, pricing]);
 
-  const isPaid = invoice.status === 'PAID' || Number(invoice.unpaidAmount ?? 0) <= 0;
+  const baseParkingAmount = pickAmount(
+    invoice.baseParkingAmount,
+    pricing.baseParkingAmount,
+    invoice.amount,
+  );
+  const registrationGraceDiscountAmount = pickAmount(
+    invoice.registrationGraceDiscountAmount,
+    pricing.registrationGraceDiscountAmount,
+    0,
+  );
+  const finalAmount = pickAmount(
+    invoice.finalAmount,
+    pricing.finalAmount,
+    invoice.amount,
+  );
+  const paidAmount = pickAmount(invoice.paidAmount, 0);
+  const unpaidAmount = pickAmount(
+    invoice.unpaidAmount,
+    finalAmount !== null ? Math.max(0, finalAmount - (paidAmount ?? 0)) : null,
+  );
+
+  const isPaid =
+    invoice.status === 'PAID' || (unpaidAmount !== null && unpaidAmount <= 0);
 
   return (
     <>
@@ -299,11 +335,18 @@ export default function PublicInvoicePage() {
                 <p className="text-sm font-black text-slate-900">요금 내역</p>
                 <div className="mt-2">
                   <InfoRow label="총 주차 시간" value={(invoice.totalMinutes ?? pricing.totalMinutes) != null ? `${invoice.totalMinutes ?? pricing.totalMinutes}분` : '-'} />
-                  <InfoRow label="기본 주차요금" value={formatMoney(invoice.baseParkingAmount ?? pricing.baseParkingAmount ?? invoice.amount)} />
-                  <InfoRow label="직접 등록 할인" value={`-${formatMoney(invoice.registrationGraceDiscountAmount ?? pricing.registrationGraceDiscountAmount ?? 0)}`} />
-                  <InfoRow label="최종 청구금액" value={formatMoney(invoice.finalAmount ?? invoice.amount)} />
-                  <InfoRow label="결제 완료금액" value={formatMoney(invoice.paidAmount)} />
-                  <InfoRow label="남은 결제금액" value={formatMoney(invoice.unpaidAmount)} />
+                  <InfoRow label="기본 주차요금" value={formatMoney(baseParkingAmount)} />
+                  <InfoRow
+                    label="직접 등록 할인"
+                    value={
+                      registrationGraceDiscountAmount && registrationGraceDiscountAmount > 0
+                        ? `-${formatMoney(registrationGraceDiscountAmount)}`
+                        : formatMoney(0)
+                    }
+                  />
+                  <InfoRow label="최종 청구금액" value={formatMoney(finalAmount)} />
+                  <InfoRow label="결제 완료금액" value={formatMoney(paidAmount)} />
+                  <InfoRow label="남은 결제금액" value={formatMoney(unpaidAmount)} />
                 </div>
               </div>
 

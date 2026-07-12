@@ -28,6 +28,11 @@ type InvoiceLike = {
   discountAmount: number;
   paidAmount: number;
   unpaidAmount: number;
+  baseParkingAmount: number;
+  registrationGraceDiscountAmount: number;
+  authorityRegistrationSurchargeAmount: number;
+  watcherRewardBasisAmount: number;
+  finalAmount: number;
   issuedAt: Date | null;
   dueAt: Date | null;
   paidAt: Date | null;
@@ -115,7 +120,7 @@ export class InvoicesService {
   ) {}
 
   async findBySessionId(sessionId: string): Promise<InvoiceLike | null> {
-    return this.prisma.invoice.findUnique({
+    return this.prisma.invoice.findFirst({
       where: {
         sessionId,
       },
@@ -152,6 +157,8 @@ export class InvoicesService {
       include: {
         session: {
           include: {
+            user: true,
+            visitorProfile: true,
             ParkingSpace: {
               include: {
                 section: {
@@ -185,6 +192,46 @@ export class InvoicesService {
         const parkingSpace = session?.ParkingSpace ?? null;
         const section = parkingSpace?.section ?? null;
         const parkingLot = section?.parkingLot ?? null;
+        const user = session?.user ?? null;
+        const visitorProfile = session?.visitorProfile ?? null;
+
+        const visitorPhone =
+          visitorProfile?.phone ??
+          visitorProfile?.phoneNumber ??
+          visitorProfile?.contactPhone ??
+          session?.contactPhone ??
+          session?.phone ??
+          sessionMetadata.contactPhone ??
+          sessionMetadata.phone ??
+          invoiceMetadata.contactPhone ??
+          invoiceMetadata.phone ??
+          null;
+
+        const memberPhone =
+          user?.phone ??
+          session?.contactPhone ??
+          session?.phone ??
+          sessionMetadata.contactPhone ??
+          sessionMetadata.phone ??
+          invoiceMetadata.contactPhone ??
+          invoiceMetadata.phone ??
+          null;
+
+        const memberName =
+          user?.name ??
+          user?.displayName ??
+          user?.fullName ??
+          null;
+
+        const customerName =
+          memberName ??
+          visitorPhone ??
+          session?.driverName ??
+          sessionMetadata.driverName ??
+          invoiceMetadata.driverName ??
+          null;
+
+        const contactPhone = visitorPhone ?? memberPhone ?? null;
 
         return {
           invoiceId: invoice.id,
@@ -215,16 +262,11 @@ export class InvoicesService {
             sessionMetadata.plateNumber ??
             invoiceMetadata.plateNumber ??
             null,
-          driverName:
-            session?.driverName ??
-            sessionMetadata.driverName ??
-            invoiceMetadata.driverName ??
-            null,
-          phone:
-            session?.phone ??
-            sessionMetadata.phone ??
-            invoiceMetadata.phone ??
-            null,
+          customerName,
+          userName: customerName,
+          driverName: customerName,
+          phone: contactPhone,
+          contactPhone,
 
           entryTime: session?.entryTime ?? null,
           exitTime: session?.exitTime ?? null,
@@ -284,6 +326,151 @@ export class InvoicesService {
             : [],
         };
       }),
+    };
+  }
+
+
+  private formatKoreanDateTime(value?: Date | string | null) {
+    if (!value) return '-';
+
+    const date = value instanceof Date ? value : new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      return '-';
+    }
+
+    const parts = new Intl.DateTimeFormat('ko-KR', {
+      timeZone: 'Asia/Seoul',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(date);
+
+    const get = (type: string) =>
+      parts.find((part) => part.type === type)?.value ?? '';
+
+    return `${get('year')}년 ${get('month')}월 ${get('day')}일 ${get('hour')}:${get('minute')}`;
+  }
+
+  async getPaymentRequestMessage(input: {
+    invoiceId: string;
+    baseUrl?: string;
+  }) {
+    this.assertCloudPaymentAuthority();
+
+    const invoice = await this.prisma.invoice.findUnique({
+      where: {
+        id: input.invoiceId,
+      },
+      include: {
+        session: {
+          include: {
+            user: true,
+            visitorProfile: true,
+            ParkingSpace: {
+              include: {
+                section: {
+                  include: {
+                    parkingLot: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!invoice) {
+      throw new NotFoundException(`Invoice not found: ${input.invoiceId}`);
+    }
+
+    const metadata = this.asObject(invoice.metadata) ?? {};
+    const session = invoice.session as any;
+    const sessionMetadata = this.asObject(session?.metadata) ?? {};
+    const parkingSpace = session?.ParkingSpace ?? null;
+    const section = parkingSpace?.section ?? null;
+    const parkingLot = section?.parkingLot ?? null;
+
+    const user = session?.user ?? null;
+    const visitorProfile = session?.visitorProfile ?? null;
+    const registrationMethod = String(session?.registrationMethod ?? '');
+    const isVisitor =
+      Boolean(visitorProfile) || registrationMethod === 'VISITOR_QR';
+
+    const visitorPhone =
+      visitorProfile?.phone ??
+      visitorProfile?.phoneNumber ??
+      visitorProfile?.contactPhone ??
+      session?.contactPhone ??
+      session?.phone ??
+      sessionMetadata.phone ??
+      metadata.phone ??
+      null;
+
+    const memberName =
+      user?.name ??
+      user?.displayName ??
+      user?.fullName ??
+      user?.phone ??
+      user?.email ??
+      null;
+
+    const customerLabel =
+      (isVisitor ? visitorPhone : memberName) ??
+      visitorPhone ??
+      memberName ??
+      session?.plateNumber ??
+      sessionMetadata.plateNumber ??
+      '고객';
+
+    const baseUrl = this.normalizeBaseUrl(input.baseUrl);
+    const paymentLinkUrl =
+      typeof metadata.paymentLinkUrl === 'string'
+        ? metadata.paymentLinkUrl
+        : `${baseUrl}/pay/invoice/${invoice.id}`;
+
+    const usedAt =
+      typeof metadata.billingPeriodStartAt === 'string'
+        ? metadata.billingPeriodStartAt
+        : typeof metadata.displayEntryTime === 'string'
+          ? metadata.displayEntryTime
+          : session?.entryTime ?? invoice.issuedAt ?? invoice.createdAt;
+
+    const parkingLotName = parkingLot?.name ?? '주차장';
+    const parkingLotLabel = String(parkingLotName).includes('주차장')
+      ? String(parkingLotName)
+      : `${parkingLotName} 주차장`;
+
+    const usedAtText = this.formatKoreanDateTime(usedAt);
+    const amount = Math.max(0, Number(invoice.unpaidAmount ?? invoice.amount ?? 0));
+
+    const message = [
+      `안녕하세요, ${customerLabel} 고객님.`,
+      `${usedAtText} 이용하신 ${parkingLotLabel} 이용 요금이 미납되었습니다.`,
+      '아래 링크를 이용해 요금을 납부해 주시기 바랍니다.',
+      '미납이 계속되면 계속 가산금이 발생합니다.',
+      '',
+      `청구서 링크: ${paymentLinkUrl}`,
+    ].join('\n');
+
+    return {
+      ok: true,
+      invoiceId: invoice.id,
+      invoiceNo: invoice.invoiceNo,
+      sessionId: invoice.sessionId,
+      customerLabel,
+      parkingLotName,
+      parkingLotLabel,
+      usedAt,
+      usedAtText,
+      amount,
+      unpaidAmount: invoice.unpaidAmount,
+      paymentLinkUrl,
+      message,
     };
   }
 
@@ -360,6 +547,8 @@ export class InvoicesService {
       include: {
         session: {
           include: {
+            user: true,
+            visitorProfile: true,
             ParkingSpace: {
               include: {
                 section: {
@@ -397,6 +586,11 @@ export class InvoicesService {
         discountAmount: invoice.discountAmount,
         paidAmount: invoice.paidAmount,
         unpaidAmount: invoice.unpaidAmount,
+        baseParkingAmount: invoice.baseParkingAmount,
+        registrationGraceDiscountAmount: invoice.registrationGraceDiscountAmount,
+        authorityRegistrationSurchargeAmount: invoice.authorityRegistrationSurchargeAmount,
+        watcherRewardBasisAmount: invoice.watcherRewardBasisAmount,
+        finalAmount: invoice.finalAmount || invoice.amount,
         issuedAt: invoice.issuedAt,
         dueAt: invoice.dueAt,
         paidAt: invoice.paidAt,
@@ -1297,7 +1491,19 @@ export class InvoicesService {
         checkedAt: now.toISOString(),
         additionalFeeAmount,
       },
-      feeCalculation: calculation,
+      feeCalculation: {
+        ...((calculation as any) ?? {}),
+        baseParkingAmount: invoice.baseParkingAmount,
+        directRegistrationDiscountAmount: invoice.registrationGraceDiscountAmount,
+        registrationGraceDiscountAmount: invoice.registrationGraceDiscountAmount,
+        authorityRegistrationSurchargeAmount:
+          invoice.authorityRegistrationSurchargeAmount,
+        watcherRewardBasisAmount: invoice.watcherRewardBasisAmount,
+        finalAmount: invoice.finalAmount || invoice.amount,
+        paidAmount: invoice.paidAmount,
+        unpaidAmount: invoice.unpaidAmount,
+        additionalFeeAmount,
+      },
       recalculatedAt: now.toISOString(),
       source: 'PAID_EXIT_GRACE_RECALCULATION',
     };
@@ -1537,15 +1743,18 @@ export class InvoicesService {
     }
   }
 
-  private normalizeBaseUrl(_value?: string) {
-    const fallback =
-      process.env.PUBLIC_CLOUD_WEB_BASE_URL ??
-      process.env.PUBLIC_WEB_BASE_URL ??
-      process.env.WEB_BASE_URL ??
+  private normalizeBaseUrl(baseUrl?: string) {
+    const value =
+      baseUrl?.trim() ||
+      process.env.PUBLIC_WEB_BASE_URL?.trim() ||
+      process.env.NEXT_PUBLIC_APP_BASE_URL?.trim() ||
+      process.env.WEB_BASE_URL?.trim() ||
+      process.env.FRONTEND_BASE_URL?.trim() ||
       'http://localhost:4000';
 
-    return fallback.replace(/\/+$/, '');
+    return value.replace(/\/+$/, '');
   }
+
 
   private resolveCollectionPaymentStatus(input: {
     invoiceStatus: string;
@@ -1640,8 +1849,181 @@ export class InvoicesService {
 
     return value as Record<string, any>;
   }
+  async listInvoices(input: { limit?: number; status?: string }) {
+    const limit = Math.min(Math.max(Number(input.limit ?? 100), 1), 300);
+
+    const invoices = await this.prisma.invoice.findMany({
+      where: input.status
+        ? {
+            status: input.status as any,
+          }
+        : undefined,
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: limit,
+      include: {
+        session: {
+          include: {
+            user: true,
+            visitorProfile: true,
+            ParkingSpace: {
+              include: {
+                section: {
+                  include: {
+                    parkingLot: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+        payments: {
+          orderBy: {
+            createdAt: 'desc',
+          },
+          take: 5,
+        },
+      },
+    });
+
+    const items = invoices.map((invoice: any) => {
+      const session = invoice.session ?? null;
+      const parkingSpace = session?.ParkingSpace ?? null;
+      const section = parkingSpace?.section ?? null;
+      const parkingLot = section?.parkingLot ?? null;
+      const user = session?.user ?? null;
+      const visitorProfile = session?.visitorProfile ?? null;
+
+      const invoiceMetadata =
+        invoice.metadata && typeof invoice.metadata === 'object'
+          ? invoice.metadata
+          : {};
+
+      const sessionMetadata =
+        session?.metadata && typeof session.metadata === 'object'
+          ? session.metadata
+          : {};
+
+      const visitorPhone =
+        visitorProfile?.phone ??
+        visitorProfile?.phoneNumber ??
+        visitorProfile?.contactPhone ??
+        session?.contactPhone ??
+        session?.phone ??
+        sessionMetadata.contactPhone ??
+        sessionMetadata.phone ??
+        invoiceMetadata.contactPhone ??
+        invoiceMetadata.phone ??
+        null;
+
+      const memberPhone =
+        user?.phone ??
+        session?.contactPhone ??
+        session?.phone ??
+        sessionMetadata.contactPhone ??
+        sessionMetadata.phone ??
+        invoiceMetadata.contactPhone ??
+        invoiceMetadata.phone ??
+        null;
+
+      const memberName =
+        user?.name ??
+        user?.displayName ??
+        user?.fullName ??
+        null;
+
+      const customerName =
+        memberName ??
+        visitorPhone ??
+        session?.driverName ??
+        sessionMetadata.driverName ??
+        invoiceMetadata.driverName ??
+        null;
+
+      const contactPhone = visitorPhone ?? memberPhone ?? null;
+
+      const paidAmount = Number(invoice.paidAmount ?? 0);
+      const amount = Number(invoice.finalAmount ?? invoice.amount ?? 0);
+      const unpaidAmount =
+        invoice.unpaidAmount != null
+          ? Number(invoice.unpaidAmount)
+          : Math.max(0, amount - paidAmount);
+
+      return {
+        id: invoice.id,
+        rowType: 'INVOICE',
+        invoiceId: invoice.id,
+        invoiceNo: invoice.invoiceNo,
+        sessionId: invoice.sessionId,
+        sessionNo: session?.sessionNo ?? null,
+
+        status: invoice.status,
+        paymentStatus: invoice.status,
+
+        amount: invoice.amount,
+        finalAmount: invoice.finalAmount ?? invoice.amount,
+        paidAmount,
+        unpaidAmount,
+        discountAmount: invoice.discountAmount ?? 0,
+
+        issuedAt: invoice.issuedAt ?? invoice.createdAt,
+        dueAt: invoice.dueAt ?? null,
+        paidAt: invoice.paidAt ?? null,
+        createdAt: invoice.createdAt,
+        updatedAt: invoice.updatedAt,
+
+        parkingLotName: parkingLot?.name ?? null,
+        parkingLotCode: parkingLot?.code ?? null,
+        sectionCode: section?.code ?? section?.name ?? null,
+        sectionName: section?.name ?? null,
+        parkingSpaceCode: parkingSpace?.code ?? null,
+        parkingSpaceNumber: parkingSpace?.number ?? null,
+
+        plateNumber:
+          session?.plateNumber ??
+          session?.vehicleNumber ??
+          sessionMetadata.plateNumber ??
+          invoiceMetadata.plateNumber ??
+          null,
+        vehicleNumber:
+          session?.vehicleNumber ??
+          session?.plateNumber ??
+          sessionMetadata.vehicleNumber ??
+          invoiceMetadata.vehicleNumber ??
+          null,
+
+        customerName,
+        userName: customerName,
+        driverName: customerName,
+        phone: contactPhone,
+        contactPhone,
+
+        entryTime:
+          invoiceMetadata.displayEntryTime ??
+          invoiceMetadata.billingPeriodStartAt ??
+          session?.entryTime ??
+          null,
+        exitTime:
+          invoiceMetadata.billingPeriodEndAt ??
+          session?.exitTime ??
+          null,
+
+        paymentCount: invoice.payments?.length ?? 0,
+      };
+    });
+
+    return {
+      items,
+      total: items.length,
+    };
+  }
+
+
 }
 
 function randomId() {
   return Math.random().toString(36).slice(2, 12);
+
+
 }

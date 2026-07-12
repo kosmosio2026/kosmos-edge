@@ -42,6 +42,14 @@ export class MobileParkingService {
             payments: true,
           },
         },
+        invoices: {
+          include: {
+            payments: true,
+          },
+          orderBy: {
+            createdAt: 'asc',
+          },
+        },
       },
     });
   }
@@ -67,6 +75,14 @@ export class MobileParkingService {
         invoice: {
           include: {
             payments: true,
+          },
+        },
+        invoices: {
+          include: {
+            payments: true,
+          },
+          orderBy: {
+            createdAt: 'asc',
           },
         },
       },
@@ -218,7 +234,7 @@ export class MobileParkingService {
     return String(userId);
   }
 
-  async getCurrentParking(jwtUser: any) {
+  async getCurrentParking(jwtUser: any, sessionId?: string) {
     const userId = this.getJwtUserId(jwtUser);
     const roles = Array.isArray(jwtUser?.roles) ? jwtUser.roles : [];
     const profileType = jwtUser?.profileType;
@@ -243,6 +259,14 @@ export class MobileParkingService {
           payments: true,
         },
       },
+      invoices: {
+        include: {
+          payments: true,
+        },
+        orderBy: {
+          createdAt: 'asc',
+        },
+      },
     } satisfies Prisma.ParkingSessionInclude;
 
     type CurrentParkingSession = Prisma.ParkingSessionGetPayload<{
@@ -252,6 +276,7 @@ export class MobileParkingService {
     const session: CurrentParkingSession | null =
       await this.prisma.parkingSession.findFirst({
         where: {
+          ...(sessionId ? { id: sessionId } : {}),
           ...(isVisitor
             ? { visitorProfileUserId: userId }
             : { userId }),
@@ -259,9 +284,9 @@ export class MobileParkingService {
             in: [
               SessionStatus.ACTIVE,
               SessionStatus.GRACE_PERIOD,
-              SessionStatus.CREATED,
             ],
           },
+          exitTime: null,
         },
         orderBy: {
           entryTime: 'desc',
@@ -299,8 +324,8 @@ export class MobileParkingService {
               code: parkingLot.code,
               address: parkingLot.address,
               region: parkingLot.region,
-              sido: parkingLot.sido,
-              sigungu: parkingLot.sigungu,
+              sido: parkingLot.region,
+              sigungu: parkingLot.district,
             }
           : null,
         section: section
@@ -325,15 +350,9 @@ export class MobileParkingService {
               vehicleType: session.vehicle.vehicleType,
             }
           : null,
-        invoice: session.invoice
-          ? {
-              id: session.invoice.id,
-              status: session.invoice.status,
-              amount: session.invoice.amount,
-              paidAmount: session.invoice.paidAmount,
-              payments: session.invoice.payments,
-            }
-          : null,
+        invoice: this.serializeMobileInvoice(
+          this.pickMobileDisplayInvoice(session),
+        ),
       },
     };
   }
@@ -364,76 +383,155 @@ export class MobileParkingService {
           },
         },
       },
+      invoices: {
+        include: {
+          payments: {
+            orderBy: {
+              createdAt: 'desc',
+            },
+          },
+        },
+        orderBy: {
+          createdAt: 'asc',
+        },
+      },
     } satisfies Prisma.ParkingSessionInclude;
 
     type PaymentSession = Prisma.ParkingSessionGetPayload<{
       include: typeof include;
     }>;
 
-    const sessions: PaymentSession[] = await this.prisma.parkingSession.findMany({
-      where: {
-        ...(isVisitor
-          ? { visitorProfileUserId: userId }
-          : { userId }),
-      },
-      orderBy: {
-        entryTime: 'desc',
-      },
-      take: 50,
+    const sessions = await this.prisma.parkingSession.findMany({
+      where: isVisitor
+        ? {
+            visitorProfileUserId: userId,
+          }
+        : {
+            userId,
+          },
       include,
+      orderBy: [
+        {
+          entryTime: 'desc',
+        },
+        {
+          createdAt: 'desc',
+        },
+      ],
+      take: 20,
+    });
+
+    const invoiceRank = (invoice: any) => {
+      const metadata = (invoice?.metadata as any) ?? {};
+      const status = String(invoice?.status ?? '').toUpperCase();
+      const unpaidAmount = Number(invoice?.unpaidAmount ?? 0);
+
+      if (
+        metadata.invoiceKind === 'ADDITIONAL_FEE' &&
+        unpaidAmount > 0 &&
+        !['PAID', 'VOID', 'CANCELLED'].includes(status)
+      ) {
+        return 0;
+      }
+
+      if (unpaidAmount > 0 && !['PAID', 'VOID', 'CANCELLED'].includes(status)) {
+        return 1;
+      }
+
+      if (status === 'PAID') {
+        return 2;
+      }
+
+      return 3;
+    };
+
+    const visibleInvoice = (invoice: any) => {
+      const status = String(invoice?.status ?? '').toUpperCase();
+
+      return !['VOID', 'CANCELLED'].includes(status);
+    };
+
+    const items = sessions.flatMap((session: PaymentSession) => {
+      const parkingSpace = session.ParkingSpace;
+      const section = parkingSpace?.section ?? null;
+      const parkingLot = section?.parkingLot ?? null;
+
+      const invoices = Array.isArray((session as any).invoices)
+        ? [...((session as any).invoices as any[])]
+        : [];
+
+      const invoiceItems = invoices.length > 0
+        ? invoices
+        : session.invoice
+          ? [session.invoice]
+          : [];
+
+      return invoiceItems
+        .filter(visibleInvoice)
+        .sort((a, b) => {
+          const rankDiff = invoiceRank(a) - invoiceRank(b);
+
+          if (rankDiff !== 0) return rankDiff;
+
+          const aTime = new Date(a?.issuedAt ?? a?.createdAt ?? 0).getTime();
+          const bTime = new Date(b?.issuedAt ?? b?.createdAt ?? 0).getTime();
+
+          return bTime - aTime;
+        })
+        .map((invoice) => {
+          const metadata = (invoice?.metadata as any) ?? {};
+          const invoiceKind = metadata.invoiceKind;
+          const displayEntryTime =
+            invoiceKind === 'ADDITIONAL_FEE'
+              ? metadata.displayEntryTime ??
+                metadata.billingPeriodStartAt ??
+                session.entryTime
+              : session.entryTime;
+
+          return {
+            id: `${session.id}:${invoice.id}`,
+            sessionId: session.id,
+            parkingSessionId: session.id,
+            invoiceId: invoice.id,
+            sessionNo: session.sessionNo,
+            status: session.status,
+            entryTime: displayEntryTime,
+            parkingEntryTime: session.entryTime,
+            exitTime: session.exitTime,
+            plateNumber: session.plateNumber ?? session.vehicle?.plateNumber ?? null,
+            registrationMethod: session.registrationMethod,
+            parkingLot: parkingLot
+              ? {
+                  id: parkingLot.id,
+                  name: parkingLot.name,
+                  address: parkingLot.address,
+                  region: parkingLot.region,
+                }
+              : null,
+            section: section
+              ? {
+                  id: section.id,
+                  name: section.name,
+                  code: section.code,
+                }
+              : null,
+            parkingSpace: parkingSpace
+              ? {
+                  id: parkingSpace.id,
+                  code: parkingSpace.code,
+                  number: parkingSpace.number,
+                }
+              : null,
+            invoice: this.serializeMobileInvoice(invoice),
+          };
+        });
     });
 
     return {
-      items: sessions.map((session) => {
-        const parkingSpace = session.ParkingSpace;
-        const section = parkingSpace?.section;
-        const parkingLot = section?.parkingLot;
-
-        return {
-          id: session.id,
-          sessionNo: session.sessionNo,
-          status: session.status,
-          entryTime: session.entryTime,
-          exitTime: session.exitTime,
-          plateNumber: session.plateNumber ?? session.vehicle?.plateNumber ?? null,
-          registrationMethod: session.registrationMethod,
-          parkingLot: parkingLot
-            ? {
-                id: parkingLot.id,
-                name: parkingLot.name,
-                address: parkingLot.address,
-                region: parkingLot.region,
-              }
-            : null,
-          section: section
-            ? {
-                id: section.id,
-                name: section.name,
-                code: section.code,
-              }
-            : null,
-          parkingSpace: parkingSpace
-            ? {
-                id: parkingSpace.id,
-                code: parkingSpace.code,
-                number: parkingSpace.number,
-              }
-            : null,
-          invoice: session.invoice
-            ? {
-                id: session.invoice.id,
-                status: session.invoice.status,
-                amount: session.invoice.amount,
-                paidAmount: session.invoice.paidAmount,
-                issuedAt: session.invoice.issuedAt,
-                dueAt: session.invoice.dueAt,
-                payments: session.invoice.payments,
-              }
-            : null,
-        };
-      }),
+      items,
     };
   }
+
 
   private diffMinutes(start?: Date | null, end?: Date | null) {
     if (!start || !end) {
@@ -543,7 +641,7 @@ export class MobileParkingService {
     return Math.max(0, Number(feePolicy?.registrationGraceFee ?? 0));
   }
 
-  async previewCurrentFee(jwtUser: any) {
+  async previewCurrentFee(jwtUser: any, sessionId?: string) {
     const userId = this.getJwtUserId(jwtUser);
     const roles = Array.isArray(jwtUser?.roles) ? jwtUser.roles : [];
     const profileType = jwtUser?.profileType;
@@ -570,6 +668,7 @@ export class MobileParkingService {
     const session: CurrentFeeSession | null =
       await this.prisma.parkingSession.findFirst({
         where: {
+          ...(sessionId ? { id: sessionId } : {}),
           ...(isVisitor
             ? { visitorProfileUserId: userId }
             : { userId }),
@@ -577,9 +676,9 @@ export class MobileParkingService {
             in: [
               SessionStatus.ACTIVE,
               SessionStatus.GRACE_PERIOD,
-              SessionStatus.CREATED,
             ],
           },
+          exitTime: null,
         },
         orderBy: {
           entryTime: 'desc',
@@ -695,14 +794,15 @@ export class MobileParkingService {
     };
   }
 
-  async finalizeCurrentInvoice(jwtUser: any) {
+  async finalizeCurrentInvoice(jwtUser: any, sessionId?: string) {
     const userId = this.getJwtUserId(jwtUser);
     const roles = Array.isArray(jwtUser?.roles) ? jwtUser.roles : [];
     const profileType = jwtUser?.profileType;
     const isVisitor = profileType === 'VISITOR' || roles.includes('VISITOR');
 
-    const session = await this.prisma.parkingSession.findFirst({
+    let session = await this.prisma.parkingSession.findFirst({
       where: {
+        ...(sessionId ? { id: sessionId } : {}),
         ...(isVisitor
           ? { visitorProfileUserId: userId }
           : { userId }),
@@ -710,10 +810,9 @@ export class MobileParkingService {
           in: [
             SessionStatus.ACTIVE,
             SessionStatus.GRACE_PERIOD,
-            SessionStatus.CREATED,
-            SessionStatus.CLOSED,
           ],
         },
+        exitTime: null,
       },
       orderBy: {
         entryTime: 'desc',
@@ -723,6 +822,24 @@ export class MobileParkingService {
       },
     });
 
+    if (!session && sessionId) {
+      session = await this.prisma.parkingSession.findFirst({
+        where: {
+          id: sessionId,
+          status: {
+            in: [
+              SessionStatus.ACTIVE,
+              SessionStatus.GRACE_PERIOD,
+            ],
+          },
+          exitTime: null,
+        },
+        select: {
+          id: true,
+        },
+      });
+    }
+
     if (!session) {
       throw new NotFoundException('Current parking session not found');
     }
@@ -730,10 +847,50 @@ export class MobileParkingService {
     return this.finalizeInvoiceForSessionId(session.id);
   }
 
+
+  private pickMobileDisplayInvoice(session: any) {
+    const invoices = Array.isArray(session?.invoices) ? session.invoices : [];
+
+    const unpaidAdditionalInvoice = invoices.find((invoice: any) => {
+      const metadata = (invoice?.metadata as any) ?? {};
+      const unpaidAmount = Number(invoice?.unpaidAmount ?? 0);
+      const status = String(invoice?.status ?? '').toUpperCase();
+
+      return (
+        metadata.invoiceKind === 'ADDITIONAL_FEE' &&
+        unpaidAmount > 0 &&
+        !['PAID', 'VOID', 'CANCELLED'].includes(status)
+      );
+    });
+
+    return unpaidAdditionalInvoice ?? session?.invoice ?? invoices[0] ?? null;
+  }
+
+
+  private serializeMobileInvoice(invoice: any) {
+    if (!invoice) return null;
+
+    return {
+      id: invoice.id,
+      invoiceNo: invoice.invoiceNo,
+      status: invoice.status,
+      amount: invoice.amount,
+      finalAmount: invoice.finalAmount,
+      paidAmount: invoice.paidAmount,
+      unpaidAmount: invoice.unpaidAmount,
+      issuedAt: invoice.issuedAt,
+      dueAt: invoice.dueAt,
+      paidAt: invoice.paidAt,
+      metadata: invoice.metadata,
+      payments: invoice.payments ?? [],
+    };
+  }
+
   async finalizeInvoiceForSessionId(sessionId: string, options?: { exitTime?: Date }) {
     const include = {
       feePolicy: true,
       vehicle: true,
+      invoice: true,
       ParkingSpace: {
         include: {
           section: {
@@ -743,7 +900,6 @@ export class MobileParkingService {
           },
         },
       },
-      invoice: true,
     } satisfies Prisma.ParkingSessionInclude;
 
     type FinalizeSessionById = Prisma.ParkingSessionGetPayload<{
@@ -814,12 +970,66 @@ export class MobileParkingService {
       baseParkingAmount - registrationGraceDiscountAmount,
     );
 
-    const paidAmount = session.invoice?.paidAmount ?? 0;
-    const unpaidAmount = Math.max(0, finalAmount - paidAmount);
+    const sessionInvoices = await this.prisma.invoice.findMany({
+      where: {
+        sessionId: session.id,
+      },
+      orderBy: {
+        createdAt: 'asc',
+      },
+    });
 
-    const invoiceNo =
-      session.invoice?.invoiceNo ??
-      `INV-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${session.sessionNo}`;
+    const paidInvoices = sessionInvoices.filter(
+      (item) => item.status === 'PAID',
+    );
+
+    const alreadyPaidAmount = paidInvoices.reduce(
+      (sum, item) => sum + Number(item.paidAmount ?? 0),
+      0,
+    );
+
+    const paidBaseInvoice =
+      paidInvoices.find((item) => {
+        const metadata = (item.metadata as any) ?? {};
+        return metadata.invoiceKind === 'PARKING_FEE' || !metadata.invoiceKind;
+      }) ??
+      session.invoice ??
+      null;
+
+    const additionalFeeAmount = Math.max(0, finalAmount - alreadyPaidAmount);
+    const shouldCreateAdditionalFee =
+      alreadyPaidAmount > 0 && additionalFeeAmount > 0;
+
+    const unpaidAdditionalInvoice = sessionInvoices.find((item) => {
+      const metadata = (item.metadata as any) ?? {};
+
+      return (
+        metadata.invoiceKind === 'ADDITIONAL_FEE' &&
+        !['PAID', 'VOID', 'CANCELLED'].includes(String(item.status))
+      );
+    });
+
+    const paidAmount = shouldCreateAdditionalFee ? 0 : alreadyPaidAmount;
+    const unpaidAmount = shouldCreateAdditionalFee
+      ? additionalFeeAmount
+      : Math.max(0, finalAmount - alreadyPaidAmount);
+    const previousUnpaidAmount = unpaidAdditionalInvoice?.unpaidAmount ?? 0;
+    const isAdditionalFeeInvoice = shouldCreateAdditionalFee;
+    const invoiceTitle = isAdditionalFeeInvoice
+      ? '추가 요금 청구서'
+      : '주차 요금 청구서';
+    const invoiceKind = isAdditionalFeeInvoice
+      ? 'ADDITIONAL_FEE'
+      : 'PARKING_FEE';
+    const invoiceStatus =
+      unpaidAmount > 0 ? ('ISSUED' as const) : ('PAID' as const);
+    const invoicePaidAt = unpaidAmount <= 0 ? new Date() : null;
+
+    const invoiceNo = isAdditionalFeeInvoice
+      ? (unpaidAdditionalInvoice?.invoiceNo ??
+        `ADD-${Date.now()}-${session.sessionNo ?? session.id}`)
+      : (session.invoice?.invoiceNo ??
+        `INV-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${session.sessionNo}`);
 
     const pricingSnapshot = {
       totalMinutes,
@@ -830,6 +1040,11 @@ export class MobileParkingService {
       finalAmount,
       paidAmount,
       unpaidAmount,
+      previousUnpaidAmount,
+      invoiceTitle,
+      invoiceKind,
+      isAdditionalFeeInvoice,
+      additionalFeeAmount: isAdditionalFeeInvoice ? unpaidAmount : 0,
       policy: {
         id: feePolicy.id,
         code: feePolicy.code,
@@ -860,60 +1075,143 @@ export class MobileParkingService {
       },
     };
 
-    const invoice = await this.prisma.invoice.upsert({
-      where: {
-        sessionId: session.id,
-      },
-      create: {
-        invoiceNo,
-        sessionId: session.id,
-        status: unpaidAmount > 0 ? 'ISSUED' : 'PAID',
-        amount: finalAmount,
-        discountAmount: registrationGraceDiscountAmount,
-        paidAmount,
-        unpaidAmount,
-        baseParkingAmount,
-        registrationGraceDiscountAmount,
-        authorityRegistrationSurchargeAmount: 0,
-        watcherRewardBasisAmount,
-        finalAmount,
-        issuedAt: new Date(),
-        paidAt: unpaidAmount > 0 ? null : new Date(),
-        metadata: pricingSnapshot as any,
-      },
-      update: {
-        status: unpaidAmount > 0 ? 'ISSUED' : 'PAID',
-        amount: finalAmount,
-        discountAmount: registrationGraceDiscountAmount,
-        paidAmount,
-        unpaidAmount,
-        baseParkingAmount,
-        registrationGraceDiscountAmount,
-        authorityRegistrationSurchargeAmount: 0,
-        watcherRewardBasisAmount,
-        finalAmount,
-        issuedAt: session.invoice?.issuedAt ?? new Date(),
-        paidAt: unpaidAmount > 0 ? null : session.invoice?.paidAt ?? new Date(),
-        metadata: pricingSnapshot as any,
-      },
-    });
+    const invoice = shouldCreateAdditionalFee
+      ? unpaidAdditionalInvoice
+        ? await this.prisma.invoice.update({
+            where: {
+              id: unpaidAdditionalInvoice.id,
+            },
+            data: {
+              status: 'ISSUED',
+              amount: additionalFeeAmount,
+              discountAmount: 0,
+              paidAmount: 0,
+              unpaidAmount: additionalFeeAmount,
+              baseParkingAmount: additionalFeeAmount,
+              registrationGraceDiscountAmount: 0,
+              authorityRegistrationSurchargeAmount: 0,
+              watcherRewardBasisAmount: 0,
+              finalAmount: additionalFeeAmount,
+              issuedAt: unpaidAdditionalInvoice.issuedAt ?? new Date(),
+              paidAt: null,
+              metadata: {
+                ...((unpaidAdditionalInvoice.metadata as any) ?? {}),
+                ...(pricingSnapshot as any),
+                invoiceTitle: '추가 요금 청구서',
+                invoiceKind: 'ADDITIONAL_FEE',
+                isAdditionalFeeInvoice: true,
+                additionalFeeAmount,
+                totalParkingAmount: finalAmount,
+                alreadyPaidAmount,
+                billingPeriodStartAt:
+                  paidBaseInvoice?.paidAt ??
+                  paidBaseInvoice?.updatedAt ??
+                  new Date(),
+                billingPeriodStartSource: 'PREVIOUS_INVOICE_PAID_AT',
+                displayEntryTime:
+                  paidBaseInvoice?.paidAt ??
+                  paidBaseInvoice?.updatedAt ??
+                  new Date(),
+              } as any,
+            },
+          })
+        : await this.prisma.invoice.create({
+            data: {
+              invoiceNo,
+              sessionId: session.id,
+              status: 'ISSUED',
+              amount: additionalFeeAmount,
+              discountAmount: 0,
+              paidAmount: 0,
+              unpaidAmount: additionalFeeAmount,
+              baseParkingAmount: additionalFeeAmount,
+              registrationGraceDiscountAmount: 0,
+              authorityRegistrationSurchargeAmount: 0,
+              watcherRewardBasisAmount: 0,
+              finalAmount: additionalFeeAmount,
+              issuedAt: new Date(),
+              dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+              paidAt: null,
+              metadata: {
+                ...(pricingSnapshot as any),
+                invoiceTitle: '추가 요금 청구서',
+                invoiceKind: 'ADDITIONAL_FEE',
+                isAdditionalFeeInvoice: true,
+                additionalFeeAmount,
+                totalParkingAmount: finalAmount,
+                alreadyPaidAmount,
+                billingPeriodStartAt:
+                  paidBaseInvoice?.paidAt ??
+                  paidBaseInvoice?.updatedAt ??
+                  new Date(),
+                billingPeriodStartSource: 'PREVIOUS_INVOICE_PAID_AT',
+                displayEntryTime:
+                  paidBaseInvoice?.paidAt ??
+                  paidBaseInvoice?.updatedAt ??
+                  new Date(),
+              } as any,
+            },
+          })
+      : session.invoice
+        ? await this.prisma.invoice.update({
+            where: {
+              id: session.invoice.id,
+            },
+            data: {
+              status: invoiceStatus,
+              amount: finalAmount,
+              discountAmount: registrationGraceDiscountAmount,
+              paidAmount: alreadyPaidAmount,
+              unpaidAmount,
+              baseParkingAmount,
+              registrationGraceDiscountAmount,
+              authorityRegistrationSurchargeAmount: 0,
+              watcherRewardBasisAmount,
+              finalAmount,
+              issuedAt: session.invoice.issuedAt ?? new Date(),
+              paidAt: invoicePaidAt,
+              metadata: pricingSnapshot as any,
+            },
+          })
+        : await this.prisma.invoice.create({
+            data: {
+              invoiceNo,
+              sessionId: session.id,
+              status: invoiceStatus,
+              amount: finalAmount,
+              discountAmount: registrationGraceDiscountAmount,
+              paidAmount: alreadyPaidAmount,
+              unpaidAmount,
+              baseParkingAmount,
+              registrationGraceDiscountAmount,
+              authorityRegistrationSurchargeAmount: 0,
+              watcherRewardBasisAmount,
+              finalAmount,
+              issuedAt: new Date(),
+              paidAt: invoicePaidAt,
+              metadata: pricingSnapshot as any,
+            },
+          });
+
 
     const updatedSession = await this.prisma.parkingSession.update({
       where: {
         id: session.id,
       },
       data: {
-        exitTime,
+        exitTime: options?.exitTime ? exitTime : session.exitTime,
         totalMinutes,
         amount: finalAmount,
-        paidAmount,
-        unpaidAmount,
+        paidAmount: alreadyPaidAmount,
+        unpaidAmount: shouldCreateAdditionalFee ? additionalFeeAmount : unpaidAmount,
         feePolicyId: feePolicy.id,
-        billingClosedAt: new Date(),
+        billingClosedAt: options?.exitTime ? new Date() : session.billingClosedAt,
+        primaryInvoiceId: isAdditionalFeeInvoice
+          ? (session.primaryInvoiceId ?? paidBaseInvoice?.id ?? null)
+          : invoice.id,
       },
       include: {
-        invoice: true,
-      },
+        },
     });
 
     return {
