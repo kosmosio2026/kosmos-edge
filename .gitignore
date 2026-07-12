@@ -1,0 +1,81 @@
+# -----------------------------
+# Node.js
+# -----------------------------
+node_modules/
+packages/*/node_modules/
+packages/shared/node_modules/
+
+# Next.js build output
+apps/web/.next/
+apps/web/out/
+apps/web/.turbo/
+
+# PNPM
+pnpm-debug.log
+.pnpm-store/
+
+# -----------------------------
+# Rust
+# -----------------------------
+target/
+edge/sensor-daemon/target/
+
+# -----------------------------
+# TypeScript
+# -----------------------------
+*.tsbuildinfo
+
+# -----------------------------
+# Logs
+# -----------------------------
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# -----------------------------
+# Environment files
+# -----------------------------
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+
+# -----------------------------
+# Build artifacts
+# -----------------------------
+dist/
+packages/*/dist/
+
+# -----------------------------
+# OS / Editor
+# -----------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# -----------------------------
+# Uploads (너의 repo에 있는 이미지들)
+# GitHub에 올릴 필요 없다고 판단됨
+# -----------------------------
+uploads/
+uploads/vehicle-plate-photos/
+
+# -----------------------------
+# Android
+# -----------------------------
+apps/android/app/build/
+
+# -----------------------------
+# Misc
+# -----------------------------
+*.cache/
+.cache/
+
+# -----------------------------
+# Android
+# -----------------------------
+apps/android/app/build/

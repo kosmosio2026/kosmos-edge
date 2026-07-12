@@ -1,0 +1,41 @@
+{
+  "name": "@parking/db",
+  "version": "0.0.1",
+  "private": true,
+  "main": "generated/client/index.js",
+  "types": "generated/client/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./generated/client/index.d.ts",
+      "default": "./generated/client/index.js"
+    },
+    "./generated/client": {
+      "types": "./generated/client/index.d.ts",
+      "default": "./generated/client/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "db:generate": "prisma generate --schema=./prisma/schema.prisma",
+    "db:push": "prisma db push --schema=./prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev --schema=./prisma/schema.prisma",
+    "db:seed": "tsx prisma/seed.ts",
+    "seed:rbac": "tsx prisma/seed-rbac.ts",
+    "seed:edge": "tsx prisma/seed-edge.ts",
+    "seed:sensor-dev": "tsx prisma/seed-sensor-dev.ts",
+    "seed:test-account": "tsx prisma/seed-test-account.ts"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "bcryptjs": "^3.0.3"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^3.0.0",
+    "prisma": "^5.22.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.6.3"
+  }
+}

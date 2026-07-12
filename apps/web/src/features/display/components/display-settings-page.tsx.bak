@@ -1,0 +1,56 @@
+import { apiFetch } from '@/lib/api-client';
+import { updateDisplayBoard } from '@/lib/display-api';
+
+const onSave = async () => {
+  try {
+    if (!session?.accessToken) {
+      alert('로그인이 필요합니다.');
+      return;
+    }
+
+    if (!boardId) {
+      alert('Display board ID가 없습니다.');
+      return;
+    }
+
+    /**
+     * 1. Save board settings
+     */
+    await updateDisplayBoard(
+      session.accessToken,
+      boardId,
+      board,
+    );
+
+    /**
+     * 2. Ping actual device after saving
+     */
+    const pingRes = await apiFetch(
+      `/display/controllers/${boardId}/ping`,
+      {
+        accessToken: session.accessToken,
+      },
+    );
+
+    if (!pingRes?.ok) {
+      alert(
+        `⚠ 장치 응답 없음: ${
+          pingRes?.error ??
+          pingRes?.message ??
+          'Unknown error'
+        }`,
+      );
+      return;
+    }
+
+    alert('설정 저장 + 장치 연결 성공!');
+  } catch (err: any) {
+    console.error(err);
+
+    alert(
+      `오류 발생: ${
+        err?.message ?? 'Unknown error'
+      }`,
+    );
+  }
+};

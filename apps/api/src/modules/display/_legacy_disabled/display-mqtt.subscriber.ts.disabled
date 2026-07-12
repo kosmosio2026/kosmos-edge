@@ -1,0 +1,264 @@
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import mqtt, { MqttClient } from 'mqtt';
+import { DisplayService } from '../display.service';
+
+@Injectable()
+export class DisplayMqttSubscriber implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(DisplayMqttSubscriber.name);
+  private client: MqttClient | null = null;
+
+  constructor(private readonly displayService: DisplayService) {}
+
+  onModuleInit() {
+    const brokerUrl = process.env.MQTT_BROKER_URL;
+    if (!brokerUrl) {
+      this.logger.warn('MQTT_BROKER_URL is not set; MQTT subscribe disabled');
+      return;
+    }
+
+    this.client = mqtt.connect(brokerUrl, {
+      username: process.env.MQTT_USERNAME,
+      password: process.env.MQTT_PASSWORD,
+      reconnectPeriod: 1000,
+    });
+
+    this.client.on('connect', () => {
+      const configRequestTopic =
+        process.env.MQTT_CONFIG_REQUEST_TOPIC ?? 'CONFIG_REQUEST';
+      const heartbeatTopic =
+        process.env.MQTT_HEARTBEAT_TOPIC ?? 'Heartbeat';
+      const errorTopic =
+        process.env.MQTT_ERROR_TOPIC ?? 'DisplayError';
+
+      this.client?.subscribe(
+        [configRequestTopic, heartbeatTopic, errorTopic],
+        { qos: 1 },
+        (err) => {
+          if (err) {
+            this.logger.error(`MQTT subscribe failed: ${err.message}`);
+            return;
+          }
+
+          this.logger.log(
+            `Subscribed to topics: ${configRequestTopic}, ${heartbeatTopic}, ${errorTopic}`,
+          );
+        },
+      );
+    });
+
+    this.client.on('message', async (topic, payload) => {
+      try {
+        const raw = payload.toString();
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+        const configRequestTopic =
+          process.env.MQTT_CONFIG_REQUEST_TOPIC ?? 'CONFIG_REQUEST';
+        const heartbeatTopic =
+          process.env.MQTT_HEARTBEAT_TOPIC ?? 'Heartbeat';
+        const errorTopic =
+          process.env.MQTT_ERROR_TOPIC ?? 'DisplayError';
+
+        if (topic === configRequestTopic) {
+          await this.handleConfigRequest(parsed);
+          return;
+        }
+
+        if (topic === heartbeatTopic) {
+          await this.handleHeartbeat(parsed);
+          return;
+        }
+
+        if (topic === errorTopic) {
+          await this.handleError(parsed);
+          return;
+        }
+      } catch (error) {
+        this.logger.error(
+          `MQTT message handling failed: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
+        );
+      }
+    });
+
+    this.client.on('reconnect', () => {
+      this.logger.warn('Reconnecting to MQTT broker...');
+    });
+
+    this.client.on('error', (error) => {
+      this.logger.error(`MQTT error: ${error.message}`);
+    });
+  }
+
+  onModuleDestroy() {
+    this.client?.end(true);
+  }
+
+  async publishDisplayUpdateForDevice(deviceId: string) {
+    const result = await this.displayService.publishDisplayUpdate(deviceId);
+    this.logger.log(
+      `publishDisplayUpdateForDevice deviceId=${deviceId} topic=${
+        (result as any).topic ?? '-'
+      }`,
+    );
+    return result;
+  }
+
+  async publishDisplayUpdateForAllMqttBoards() {
+    const boards = await this.displayService.list();
+
+    const mqttBoards = boards.filter(
+      (board) => String(board.controllerMode) === 'MQTT',
+    );
+
+    const results = [];
+    for (const board of mqttBoards) {
+      try {
+        const published = await this.displayService.publishDisplayUpdate(
+          board.deviceId,
+        );
+        results.push({
+          deviceId: board.deviceId,
+          ok: true,
+          topic: (published as any).topic ?? null,
+        });
+      } catch (error) {
+        results.push({
+          deviceId: board.deviceId,
+          ok: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+
+    return {
+      ok: true,
+      count: results.length,
+      results,
+    };
+  }
+
+  private async handleConfigRequest(payload: Record<string, unknown>) {
+    const macRaw = typeof payload.mac === 'string' ? payload.mac : null;
+    const mac = macRaw ? normalizeMacAddress(macRaw) : null;
+
+    if (!mac) {
+      this.logger.warn('CONFIG_REQUEST received without valid mac');
+      return;
+    }
+
+    const config = await this.displayService.getConfigByMac(mac);
+    const topic =
+      typeof config.transportConfig?.mqttTopic === 'string'
+        ? config.transportConfig.mqttTopic
+        : mac;
+
+    await this.publish(topic, config);
+
+    this.logger.log(
+      `Published display.config to topic=${topic} mac=${mac} deviceId=${config.deviceId}`,
+    );
+  }
+
+  private async handleHeartbeat(payload: Record<string, unknown>) {
+    const deviceId =
+      typeof payload.deviceId === 'string' ? payload.deviceId : null;
+
+    if (!deviceId) {
+      this.logger.warn('Heartbeat received without deviceId');
+      return;
+    }
+
+    await this.displayService.receiveHeartbeat(deviceId, {
+      status:
+        typeof payload.status === 'string'
+          ? (payload.status as any)
+          : 'OK',
+      interface:
+        typeof payload.interface === 'string'
+          ? (payload.interface as any)
+          : undefined,
+      transport:
+        typeof payload.transport === 'string'
+          ? (payload.transport as any)
+          : undefined,
+      lastDisplayedState:
+        payload.lastDisplayedState &&
+        typeof payload.lastDisplayedState === 'object'
+          ? (payload.lastDisplayedState as Record<string, unknown>)
+          : undefined,
+      errorDetails:
+        typeof payload.errorDetails === 'string'
+          ? payload.errorDetails
+          : undefined,
+      timestamp:
+        typeof payload.timestamp === 'string'
+          ? payload.timestamp
+          : undefined,
+    });
+
+    this.logger.log(`Heartbeat received for deviceId=${deviceId}`);
+  }
+
+  private async handleError(payload: Record<string, unknown>) {
+    const deviceId =
+      typeof payload.deviceId === 'string' ? payload.deviceId : null;
+
+    if (!deviceId) {
+      this.logger.warn('DisplayError received without deviceId');
+      return;
+    }
+
+    await this.displayService.receiveError(deviceId, {
+      code:
+        typeof payload.code === 'string' ? payload.code : 'DISPLAY_ERROR',
+      message:
+        typeof payload.message === 'string'
+          ? payload.message
+          : 'Unknown display error',
+      attempt:
+        typeof payload.attempt === 'number' ? payload.attempt : undefined,
+      interface:
+        typeof payload.interface === 'string'
+          ? payload.interface
+          : undefined,
+      transport:
+        typeof payload.transport === 'string'
+          ? payload.transport
+          : undefined,
+      stateRevision:
+        typeof payload.stateRevision === 'number'
+          ? payload.stateRevision
+          : undefined,
+      timestamp:
+        typeof payload.timestamp === 'string'
+          ? payload.timestamp
+          : undefined,
+    });
+
+    this.logger.warn(`Display error received for deviceId=${deviceId}`);
+  }
+
+  private async publish(topic: string, payload: unknown) {
+    if (!this.client) {
+      this.logger.warn(`Publish skipped, MQTT client unavailable: ${topic}`);
+      return;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      this.client!.publish(
+        topic,
+        JSON.stringify(payload),
+        { qos: 1, retain: false },
+        (error) => {
+          if (error) reject(error);
+          else resolve();
+        },
+      );
+    });
+  }
+}
+
+function normalizeMacAddress(mac: string) {
+  return mac.replace(/[^a-fA-F0-9]/g, '').toUpperCase();
+}

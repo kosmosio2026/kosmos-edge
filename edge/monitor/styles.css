@@ -1,0 +1,232 @@
+:root {
+  --bg: #f4f6f9;
+  --card-bg: #ffffff;
+  --text: #222;
+  --text-light: #555;
+  --accent: #007bff;
+
+  --gray: #7f8c8d;
+  --green: #27ae60;
+  --yellow: #f1c40f;
+  --red: #e74c3c;
+}
+
+:root.dark {
+  --bg: #111827;
+  --card-bg: #1f2937;
+  --text: #e5e7eb;
+  --text-light: #9ca3af;
+  --accent: #60a5fa;
+
+  --gray: #4b5563;
+  --green: #16a34a;
+  --yellow: #facc15;
+  --red: #ef4444;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  margin: 0;
+  padding: 20px;
+  font-family: Arial, sans-serif;
+  transition: background 0.3s, color 0.3s;
+}
+
+header {
+  background: var(--card-bg);
+  padding: 15px 20px;
+  border-radius: 10px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+  margin-bottom: 25px;
+  text-align: center;
+}
+
+nav a {
+  margin: 0 12px;
+  text-decoration: none;
+  color: var(--text);
+  font-weight: bold;
+}
+
+#theme-toggle {
+  margin-left: 10px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--text-light);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 30px;
+  max-width: 1200px;
+  margin: auto;
+}
+
+.card {
+  background: var(--card-bg);
+  padding: 20px;
+  border-radius: 12px;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+}
+
+.sensor-value {
+  font-size: 18px;
+  margin: 6px 0;
+}
+
+.timestamp {
+  font-size: 13px;
+  color: var(--text-light);
+}
+
+.parking-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 16px;
+}
+
+.parking-spot {
+  width: 120px;
+  height: 120px;
+  border-radius: 10px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  color: white;
+  font-weight: bold;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+}
+
+.spot-header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+}
+
+.slot-label { font-size: 12px; }
+.spot-number { font-size: 11px; opacity: 0.9; }
+
+.dev-eui {
+  font-size: 10px;
+  opacity: 0.85;
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.spot-status { font-size: 12px; margin-top: 4px; }
+.spot-elapsed { font-size: 10px; opacity: 0.9; margin-top: 4px; }
+.spot-updated { font-size: 10px; opacity: 0.9; margin-top: 2px; }
+
+.parking-spot.in { background: var(--green); }
+.parking-spot.out { background: var(--gray); }
+.parking-spot.delay { background: var(--yellow); color: #222; }
+.parking-spot.error { background: var(--red); }
+
+.fade-in {
+  animation: fadeIn 0.4s ease;
+}
+
+/* ------------------------------
+   PARKING LIST PAGE (parking.html)
+------------------------------ */
+
+main {
+  padding: 10px 20px;
+}
+
+h2 {
+  margin-bottom: 15px;
+  font-size: 26px;
+  color: var(--text);
+}
+
+/* Controls */
+#controls {
+  margin-bottom: 15px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+#controls select {
+  padding: 8px 12px;
+  font-size: 15px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  background: white;
+}
+
+/* Table */
+#data-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--card-bg);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+}
+
+#data-table th {
+  background: #eef1f5;
+  padding: 12px 14px;
+  font-weight: bold;
+  text-align: center;
+  font-size: 15px;
+  border-bottom: 2px solid #e0e0e0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+#data-table td {
+  padding: 12px 14px;
+  text-align: center;
+  font-size: 14px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+#data-table tr:nth-child(even) {
+  background: #fafafa;
+}
+
+#data-table tr:hover {
+  background: #f0f9ff;
+}
+
+/* Pagination */
+#pagination {
+  margin-top: 18px;
+  text-align: center;
+}
+
+#pagination button {
+  padding: 8px 14px;
+  margin: 0 5px;
+  font-size: 14px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  background: white;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+#pagination button:hover:not(:disabled) {
+  background: #e8f0fe;
+  border-color: #90b4f8;
+}
+
+#pagination button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}

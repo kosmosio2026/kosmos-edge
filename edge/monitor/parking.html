@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>주차 센서 데이터</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+
+<header>
+  <nav>
+    <a href="index.html">홈</a>
+    <a href="sensio.html">SENSIO 환경 센서</a>
+    <a href="parking.html">주차 센서</a>
+    <a href="tracker.html">트래커</a>    
+    <a href="tracker_history.html">트래커 이력</a>
+    <a href="mqtt_pub.html">원격제어 테스트</a>
+    <a href="sensor_control.html">센서 제어</a>
+  </nav>
+</header>
+
+<main>
+  <h2>주차 센서 데이터</h2>
+
+  <div id="controls">
+    <label>디바이스 선택:</label>
+    <select id="devEuiSelect">
+      <option value="">전체 보기</option>
+    </select>
+  </div>
+
+  <table id="data-table"></table>
+  <div id="pagination"></div>
+</main>
+
+<script>
+  let allRows = [];
+  let filteredRows = [];
+  let currentPage = 1;
+  const rowsPerPage = 20;
+
+  const WS_URL =
+    (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
+
+  function toKST(utcString) {
+    return new Date(utcString).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+  }
+
+  const headerOrder = [
+    "time",
+    "dev_eui",
+    "parking_status",
+    "rssi",
+    "snr"
+  ];
+
+  const headerMap = {
+    time: "수신 시간",
+    dev_eui: "디바이스 EUI",
+    parking_status: "주차 상태",
+    rssi: "RSSI",
+    snr: "SNR"
+  };
+
+  function renderTable() {
+    const table = document.getElementById("data-table");
+
+    if (filteredRows.length === 0) {
+      table.innerHTML = "<tr><td>데이터 없음</td></tr>";
+      document.getElementById("pagination").innerHTML = "";
+      return;
+    }
+
+    const start = (currentPage - 1) * rowsPerPage;
+    const end = start + rowsPerPage;
+    const pageRows = filteredRows.slice(start, end);
+
+    table.innerHTML = `
+      <tr>${headerOrder.map(h => `<th>${headerMap[h]}</th>`).join("")}</tr>
+      ${pageRows.map(r => `
+        <tr>
+          <td>${toKST(r.time)}</td>
+          <td>${r.dev_eui}</td>
+          <td>${r.parking_status}</td>
+          <td>${r.rssi}</td>
+          <td>${r.snr}</td>
+        </tr>
+      `).join("")}
+    `;
+
+    renderPagination();
+  }
+
+  function renderPagination() {
+    const totalPages = Math.ceil(filteredRows.length / rowsPerPage);
+    const pag = document.getElementById("pagination");
+
+    if (totalPages <= 1) {
+      pag.innerHTML = "";
+      return;
+    }
+
+    pag.innerHTML = `
+      <button ${currentPage === 1 ? "disabled" : ""} onclick="changePage(${currentPage - 1})">이전</button>
+      <span>페이지 ${currentPage} / ${totalPages}</span>
+      <button ${currentPage === totalPages ? "disabled" : ""} onclick="changePage(${currentPage + 1})">다음</button>
+    `;
+  }
+
+  function changePage(page) {
+    currentPage = page;
+    renderTable();
+  }
+
+  function applyFilter() {
+    const selected = document.getElementById("devEuiSelect").value;
+
+    filteredRows = selected
+      ? allRows.filter(r => r.dev_eui === selected)
+      : allRows;
+
+    currentPage = 1;
+    renderTable();
+  }
+
+  const ws = new WebSocket(WS_URL);
+
+  ws.onmessage = (msg) => {
+    const payload = JSON.parse(msg.data);
+
+    if (payload.type === "parking_history") {
+      allRows = payload.rows;
+
+      const devEuiSet = [...new Set(allRows.map(r => r.dev_eui))];
+
+      const select = document.getElementById("devEuiSelect");
+      select.innerHTML = `<option value="">전체 보기</option>`;
+      devEuiSet.forEach(dev => {
+        const opt = document.createElement("option");
+        opt.value = dev;
+        opt.textContent = dev;
+        select.appendChild(opt);
+      });
+
+      select.onchange = applyFilter;
+
+      filteredRows = allRows;
+      renderTable();
+    }
+  };
+</script>
+
+</body>
+</html>

@@ -1,0 +1,13 @@
+# /home/project/edge/mqtt-daemon/apps.toml
+
+[parking]
+applicationId = "902d1006-c0a3-47b8-af37-948da618af75"
+table = "parking_sensor_data"
+
+[sensio]
+applicationId = "ccc7f407-6a82-4a66-b78a-ea6dd91a75f7"
+table = "sensio_env_data"
+
+[tracker]
+applicationId = "1e14edf8-064a-4d2c-8a22-21799449122b"
+table = "kosmos_tracker_data"

@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,body{
+margin:0;
+padding:0;
+background:#f8fafc;
+font-family:Inter,system-ui,sans-serif;
+}
+
+*{
+box-sizing:border-box;
+}
+
+@layer components{
+
+.card{
+@apply bg-white rounded-3xl shadow p-6;
+}
+
+.primary-btn{
+@apply bg-blue-600 text-white rounded-2xl px-5 py-3 font-semibold;
+}
+
+.badge-ok{
+@apply bg-green-100 text-green-700 rounded-full px-3 py-1 text-xs;
+}
+
+.badge-alert{
+@apply bg-red-100 text-red-700 rounded-full px-3 py-1 text-xs;
+}
+
+}
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Kosmos mobile app style hooks */
+[data-kosmos-mobile-shell] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+[data-kosmos-mobile-shell] input,
+[data-kosmos-mobile-shell] select,
+[data-kosmos-mobile-shell] textarea {
+  font-size: 16px;
+}
+
+[data-kosmos-mobile-bottom-nav] {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+[data-kosmos-mobile-legal-footer] {
+  margin-bottom: 0.75rem;
+}

@@ -1,0 +1,41 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.kosmos.app"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.kosmos.app"
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName "0.1.0"
+    }
+
+    flavorDimensions "app"
+
+    productFlavors {
+        watcher {
+            dimension "app"
+            applicationId "com.kosmos.watcher"
+            resValue "string", "app_name", "Kosmos Watcher"
+            resValue "string", "start_url", "http://112.171.47.68:4000/watcher"
+        }
+
+        member {
+            dimension "app"
+            applicationId "com.kosmos.parking"
+            resValue "string", "app_name", "Kosmos Parking"
+            resValue "string", "start_url", "http://112.171.47.68:4000/mobile"
+        }
+
+        operator {
+            dimension "app"
+            applicationId "com.kosmos.operator"
+            resValue "string", "app_name", "Kosmos Operator"
+            resValue "string", "start_url", "http://112.171.47.68:4000/operator"
+        }
+    }
+}

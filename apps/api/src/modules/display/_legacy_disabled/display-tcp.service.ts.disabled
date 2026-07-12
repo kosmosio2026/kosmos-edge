@@ -1,0 +1,55 @@
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import * as net from 'net';
+import { DisplayService } from './display.service';
+
+@Injectable()
+export class DisplayTcpService implements OnModuleInit, OnModuleDestroy {
+  private server: net.Server | null = null;
+
+  constructor(private readonly displayService: DisplayService) {}
+
+  onModuleInit() {
+    const port = Number(process.env.DISPLAY_TCP_PORT ?? 4700);
+
+    this.server = net.createServer((socket) => {
+      socket.on('data', async (buffer) => {
+        const raw = buffer.toString().trim();
+
+        try {
+          const [command, parkingLotId] = raw.split(' ');
+
+          if (command !== 'GET_DISPLAY' || !parkingLotId) {
+            socket.write(
+              JSON.stringify({
+                ok: false,
+                code: 'INVALID_COMMAND',
+              }) + '\n',
+            );
+            return;
+          }
+
+          const payload = await this.displayService.getParkingLotDisplay(parkingLotId);
+          socket.write(JSON.stringify(payload) + '\n');
+        } catch (error) {
+          socket.write(
+            JSON.stringify({
+              ok: false,
+              code: 'DISPLAY_FETCH_FAILED',
+              message: error instanceof Error ? error.message : 'Unknown error',
+            }) + '\n',
+          );
+        }
+      });
+    });
+
+    this.server.listen(port, () => {
+      console.log(`Display TCP server listening on ${port}`);
+    });
+  }
+
+  onModuleDestroy() {
+    if (this.server) {
+      this.server.close();
+    }
+  }
+}

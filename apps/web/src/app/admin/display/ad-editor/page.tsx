@@ -1,0 +1,1 @@
+export { default } from '@/features/display/pages/ad-editor-page';

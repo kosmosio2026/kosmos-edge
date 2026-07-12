@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>트래커 지도 (Google Maps)</title>
+  <link rel="stylesheet" href="styles.css">
+
+  <style>
+    #map { width: 100%; height: 500px; margin-top: 20px; }
+    #dev-filter { margin-top: 10px; padding: 6px; }
+  </style>
+
+  <!-- Google Maps JavaScript API -->
+  <!-- Replace YOUR_GOOGLE_MAPS_API_KEY with your actual key -->
+  <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY"></script>
+</head>
+
+<body>
+
+<header>
+  <nav>
+    <a href="index.html">홈</a>
+    <a href="sensio.html">SENSIO 환경 센서</a>
+    <a href="parking.html">주차 센서</a>
+    <a href="tracker.html">트래커 지도</a>
+    <a href="tracker_history.html">트래커 이력</a>
+    <a href="mqtt_pub.html">원격제어 테스트</a>
+    <a href="sensor_control.html">센서 제어</a>
+  </nav>
+</header>
+
+<main>
+  <h2>트래커 지도 (Google Maps)</h2>
+
+  <label>DevEUI 선택:</label>
+  <select id="dev-filter">
+    <option value="ALL">전체</option>
+  </select>
+
+  <div id="map"></div>
+</main>
+
+<script>
+let trackerRows = [];
+let map = null;
+let polyline = null;
+let markers = {};
+let selectedDev = "ALL";
+
+/* ------------------------------
+   MAP INITIALIZATION
+------------------------------ */
+function initMap() {
+  map = new google.maps.Map(document.getElementById("map"), {
+    center: { lat: 37.5665, lng: 126.9780 }, // Seoul
+    zoom: 13
+  });
+}
+
+/* ------------------------------
+   MARKERS
+------------------------------ */
+function updateMarkers() {
+  if (!map) return;
+
+  Object.values(markers).forEach(m => m.setMap(null));
+  markers = {};
+
+  let filtered = trackerRows;
+  if (selectedDev !== "ALL") {
+    filtered = trackerRows.filter(r => r.dev_eui === selectedDev);
+  }
+
+  if (filtered.length === 0) {
+    if (polyline) polyline.setMap(null);
+    map.setCenter({ lat: 37.5665, lng: 126.9780 });
+    return;
+  }
+
+  filtered.forEach(r => {
+    const pos = { lat: r.latitude_deg, lng: r.longitude_deg };
+
+    const icon = r.battery_status === 0
+      ? "http://maps.google.com/mapfiles/ms/icons/red-dot.png"
+      : "http://maps.google.com/mapfiles/ms/icons/green-dot.png";
+
+    const marker = new google.maps.Marker({
+      position: pos,
+      map: map,
+      icon: icon
+    });
+
+    markers[r.id] = marker;
+  });
+
+  drawPolyline();
+}
+
+/* ------------------------------
+   POLYLINE
+------------------------------ */
+function drawPolyline() {
+  if (!map) return;
+
+  if (polyline) polyline.setMap(null);
+
+  let filtered = trackerRows;
+  if (selectedDev !== "ALL") {
+    filtered = trackerRows.filter(r => r.dev_eui === selectedDev);
+  }
+
+  if (filtered.length === 0) return;
+
+  const path = filtered.map(r => ({ lat: r.latitude_deg, lng: r.longitude_deg }));
+
+  polyline = new google.maps.Polyline({
+    path: path,
+    geodesic: true,
+    strokeColor: "#007bff",
+    strokeOpacity: 0.8,
+    strokeWeight: 4
+  });
+
+  polyline.setMap(map);
+
+  const last = filtered[0];
+  map.setCenter({ lat: last.latitude_deg, lng: last.longitude_deg });
+}
+
+/* ------------------------------
+   DEV FILTER
+------------------------------ */
+function updateDevFilter() {
+  const devs = [...new Set(trackerRows.map(r => r.dev_eui))];
+  const select = document.getElementById("dev-filter");
+
+  select.innerHTML = `<option value="ALL">전체</option>` +
+    devs.map(d => `<option value="${d}">${d}</option>`).join("");
+
+  select.onchange = () => {
+    selectedDev = select.value;
+    updateMarkers();
+  };
+}
+
+/* ------------------------------
+   WEBSOCKET
+------------------------------ */
+const ws = new WebSocket("ws://parking.kosmos.io.kr/ws");
+
+ws.onmessage = (msg) => {
+  const payload = JSON.parse(msg.data);
+
+  if (payload.type === "tracker") {
+    trackerRows = payload.rows;
+    updateDevFilter();
+    updateMarkers();
+  }
+};
+
+/* ------------------------------
+   LOAD GOOGLE MAP
+------------------------------ */
+window.onload = () => {
+  initMap();
+};
+</script>
+
+</body>
+</html>

@@ -1,0 +1,196 @@
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '@/components/providers/auth-provider';
+import { apiFetch } from '@/lib/api-client';
+
+type PendingOperatorSectionRequest = {
+  id: string;
+  requesterId?: string | null;
+  requester?: {
+    name?: string | null;
+    email?: string | null;
+  } | null;
+  name?: string | null;
+  email?: string | null;
+  companyName?: string | null;
+  requestedParkingLotId?: string | null;
+  requestedSectionId?: string | null;
+  parkingLot?: {
+    name?: string | null;
+    code?: string | null;
+  } | null;
+  parkingSection?: {
+    name?: string | null;
+    code?: string | null;
+  } | null;
+  status?: string | null;
+  createdAt?: string | null;
+};
+
+function formatDate(value?: string | null) {
+  if (!value) return '-';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleString();
+}
+
+export default function ManagerOperatorSectionApprovalsPage() {
+  const { session } = useAuth();
+  const [items, setItems] = useState<PendingOperatorSectionRequest[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!session?.accessToken) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const result = await apiFetch('/approval/operator-section-requests/pending', {
+        accessToken: session.accessToken,
+      });
+
+      setItems(Array.isArray(result) ? result : []);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : 'Failed to load operator section approvals.',
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [session?.accessToken]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function review(requestId: string, status: 'APPROVED' | 'REJECTED') {
+    if (!session?.accessToken) return;
+
+    setReviewingId(requestId);
+    setError(null);
+
+    try {
+      await apiFetch(`/approval/operator-sections/${requestId}/review`, {
+        method: 'POST',
+        accessToken: session.accessToken,
+        body: JSON.stringify({ status }),
+      });
+
+      await load();
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : `Failed to ${status.toLowerCase()} request.`,
+      );
+    } finally {
+      setReviewingId(null);
+    }
+  }
+
+  return (
+    <main className="space-y-6 p-6">
+      <div>
+        <h1 className="text-2xl font-semibold">Operator Section Approvals</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          Review operator parking section access requests.
+        </p>
+      </div>
+
+      {error ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {error}
+        </div>
+      ) : null}
+
+      {loading ? (
+        <div className="text-sm text-slate-500">Loading...</div>
+      ) : null}
+
+      <section className="overflow-hidden rounded-2xl border bg-white">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-slate-50 text-slate-600">
+            <tr>
+              <th className="px-4 py-3">No.</th>
+              <th className="px-4 py-3">Requester</th>
+              <th className="px-4 py-3">Email</th>
+              <th className="px-4 py-3">Parking Lot</th>
+              <th className="px-4 py-3">Section</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Created</th>
+              <th className="px-4 py-3">Action</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {items.map((item, index) => (
+              <tr key={item.id} className="border-t">
+                <td className="px-4 py-3">{index + 1}</td>
+                <td className="px-4 py-3">
+                  {item.requester?.name ?? item.name ?? '-'}
+                </td>
+                <td className="px-4 py-3">
+                  {item.requester?.email ?? item.email ?? '-'}
+                </td>
+                <td className="px-4 py-3">
+                  {item.parkingLot?.name ??
+                    item.parkingLot?.code ??
+                    item.requestedParkingLotId ??
+                    '-'}
+                </td>
+                <td className="px-4 py-3">
+                  {item.parkingSection?.name ??
+                    item.parkingSection?.code ??
+                    item.requestedSectionId ??
+                    '-'}
+                </td>
+                <td className="px-4 py-3">{item.status ?? '-'}</td>
+                <td className="px-4 py-3">{formatDate(item.createdAt)}</td>
+                <td className="px-4 py-3">
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={reviewingId === item.id}
+                      onClick={() => review(item.id, 'APPROVED')}
+                      className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50"
+                    >
+                      Approve
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={reviewingId === item.id}
+                      onClick={() => review(item.id, 'REJECTED')}
+                      className="rounded-xl border px-3 py-2 text-xs font-medium text-slate-700 disabled:opacity-50"
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+
+            {!loading && items.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={8}
+                  className="px-4 py-10 text-center text-slate-500"
+                >
+                  No pending operator section approvals.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </section>
+    </main>
+  );
+}

@@ -1,0 +1,6 @@
+      <Input placeholder="Region" value={region} onChange={(e) => setRegion(e.target.value)} />
+      <Input placeholder="Address" value={address} onChange={(e) => setAddress(e.target.value)} />
+      <Button disabled={loading}>{loading ? 'Saving...' : 'Save'}</Button>
+    </form>
+  );
+}

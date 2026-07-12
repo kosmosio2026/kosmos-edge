@@ -1,0 +1,55 @@
+[package]
+name = "sensor-daemon"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+dotenvy = "0.15"
+
+# MQTT
+rumqttc = "0.24"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# HTTP client for notifying NestJS API
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# Database
+sqlx = { version = "0.7", features = [
+    "runtime-tokio-rustls",
+    "postgres",
+    "macros",
+    "chrono"
+] }
+
+# Async runtime
+tokio = { version = "1", features = [
+    "macros",
+    "rt-multi-thread",
+    "time",
+    "sync",
+    "net"
+] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Config
+toml = "0.8"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Web server + WebSocket
+axum = { version = "0.7", features = ["ws"] }
+
+# CORS support
+tower-http = { version = "0.6", features = ["cors"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

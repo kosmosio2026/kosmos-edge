@@ -1,0 +1,111 @@
+import {
+  IsBoolean,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
+import { DisplayControllerMode, DisplayProtocol } from '@parking/db';
+
+export class CreateDisplayBoardDto {
+  @IsString()
+  deviceId!: string;
+
+  @IsString()
+  macAddress!: string;
+
+  @IsString()
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  parkingLotId?: string;
+
+  @IsOptional()
+  @IsString()
+  parkingSectionId?: string;
+
+  @IsOptional()
+  @IsEnum(DisplayControllerMode)
+  controllerMode?: DisplayControllerMode;
+
+  @IsOptional()
+  @IsEnum(DisplayProtocol)
+  displayProtocol?: DisplayProtocol;
+
+  @IsOptional()
+  @IsString()
+  tcpHost?: string;
+
+  @IsOptional()
+  @IsInt()
+  tcpPort?: number;
+
+  @IsOptional()
+  @IsString()
+  modbusHost?: string;
+
+  @IsOptional()
+  @IsInt()
+  modbusPort?: number;
+
+  @IsOptional()
+  @IsInt()
+  modbusUnitId?: number;
+
+  @IsOptional()
+  @IsString()
+  serialPort?: string;
+
+  @IsOptional()
+  @IsInt()
+  baudRate?: number;
+
+  @IsOptional()
+  @IsString()
+  parity?: string;
+
+  @IsOptional()
+  @IsInt()
+  stopBits?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(5)
+  heartbeatIntervalSec?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  retryMaxAttempts?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(100)
+  retryBackoffMs?: number;
+
+  @IsOptional()
+  @IsString()
+  registerProfile?: string;
+
+  @IsOptional()
+  @IsString()
+  mqttTopic?: string;
+
+  @IsOptional()
+  @IsString()
+  mqttHeartbeatTopic?: string;
+
+  @IsOptional()
+  @IsString()
+  wsPath?: string;
+
+  @IsOptional()
+  @IsString()
+  restPath?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}

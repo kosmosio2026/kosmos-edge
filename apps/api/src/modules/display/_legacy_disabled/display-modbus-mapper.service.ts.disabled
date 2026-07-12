@@ -1,0 +1,71 @@
+import { Injectable } from '@nestjs/common';
+import { DisplayService } from './display.service';
+
+@Injectable()
+export class DisplayModbusMapperService {
+  constructor(private readonly displayService: DisplayService) {}
+
+  /**
+   * zone_summary_v1
+   *
+   * Register map:
+   * 100 -> overall total
+   * 101 -> overall occupied
+   * 102 -> overall available
+   * 110/111/112 -> section #1 total/occupied/available
+   * 113/114/115 -> section #2 total/occupied/available
+   * 116/117/118 -> section #3 total/occupied/available
+   * 119/120/121 -> section #4 total/occupied/available
+   */
+  async mapParkingLotToRegisters(parkingLotId: string): Promise<number[]> {
+    const data = await this.displayService.getParkingLotDisplay(parkingLotId);
+
+    const overallOccupiedSpaces = Math.max(
+      data.totalSpaces - data.availableSpaces,
+      0,
+    );
+
+    const registers: number[] = [
+      clampU16(data.totalSpaces),
+      clampU16(overallOccupiedSpaces),
+      clampU16(data.availableSpaces),
+    ];
+
+    for (const section of data.sections) {
+      const sectionOccupiedSpaces = Math.max(
+        section.totalSpaces - section.availableSpaces,
+        0,
+      );
+
+      registers.push(
+        clampU16(section.totalSpaces),
+        clampU16(sectionOccupiedSpaces),
+        clampU16(section.availableSpaces),
+      );
+    }
+
+    // 최대 4개 section * 3 register = 12칸 고정
+    while (registers.length < 3 + 12) {
+      registers.push(0);
+    }
+
+    return registers;
+  }
+
+  async mapParkingLotToAddressValuePairs(
+    parkingLotId: string,
+  ): Promise<Array<{ address: number; value: number }>> {
+    const values = await this.mapParkingLotToRegisters(parkingLotId);
+    const baseAddress = 100;
+
+    return values.map((value, index) => ({
+      address: baseAddress + index,
+      value,
+    }));
+  }
+}
+
+function clampU16(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(65535, Math.round(value)));
+}

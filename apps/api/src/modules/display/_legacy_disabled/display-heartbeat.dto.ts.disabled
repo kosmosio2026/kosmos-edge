@@ -1,0 +1,27 @@
+import { IsEnum, IsObject, IsOptional, IsString } from 'class-validator';
+import { DisplayBoardStatus, DisplayControllerMode, DisplayProtocol } from '@parking/db';
+
+export class DisplayHeartbeatDto {
+  @IsEnum(DisplayBoardStatus)
+  status!: DisplayBoardStatus;
+
+  @IsOptional()
+  @IsEnum(DisplayProtocol)
+  interface?: DisplayProtocol;
+
+  @IsOptional()
+  @IsEnum(DisplayControllerMode)
+  transport?: DisplayControllerMode;
+
+  @IsOptional()
+  @IsObject()
+  lastDisplayedState?: Record<string, unknown>;
+
+  @IsOptional()
+  @IsString()
+  errorDetails?: string;
+
+  @IsOptional()
+  @IsString()
+  timestamp?: string;
+}

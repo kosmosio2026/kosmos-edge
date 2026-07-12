@@ -1,0 +1,223 @@
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '@/components/providers/auth-provider';
+import { apiFetch } from '@/lib/api-client';
+
+type Role = 'admin' | 'manager';
+
+type PendingOperatorSectionRequest = {
+  id: string;
+  requesterId?: string | null;
+  requester?: {
+    name?: string | null;
+    email?: string | null;
+  } | null;
+  name?: string | null;
+  email?: string | null;
+  companyName?: string | null;
+  requestedParkingLotId?: string | null;
+  requestedSectionId?: string | null;
+  parkingLot?: {
+    name?: string | null;
+    code?: string | null;
+  } | null;
+  parkingSection?: {
+    name?: string | null;
+    code?: string | null;
+  } | null;
+  status?: string | null;
+  createdAt?: string | null;
+};
+
+function formatDate(value?: string | null) {
+  if (!value) return '-';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleString();
+}
+
+function statusLabel(value?: string | null) {
+  if (value === 'PENDING') return '대기';
+  if (value === 'APPROVED') return '승인';
+  if (value === 'REJECTED') return '반려';
+  return value ?? '-';
+}
+
+function getListPath(role: Role) {
+  return role === 'manager'
+    ? '/approval/manager/pending-operator-sections'
+    : '/approval/admin/pending-operator-sections';
+}
+
+export default function OperatorSectionApprovalsPage({
+  role = 'admin',
+}: {
+  role?: Role;
+}) {
+  const { session, logout } = useAuth();
+  const [items, setItems] = useState<PendingOperatorSectionRequest[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loginPath = role === 'manager' ? '/manager/login' : '/admin/login';
+
+  const load = useCallback(async () => {
+    if (!session?.accessToken) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const result = await apiFetch(getListPath(role), {
+        accessToken: session.accessToken,
+      });
+
+      setItems(Array.isArray(result) ? result : []);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : '운영자 구역 승인 요청을 불러오지 못했습니다.';
+
+      if (message.toLowerCase().includes('unauthorized')) {
+        logout(loginPath);
+        return;
+      }
+
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  }, [session?.accessToken, logout, loginPath, role]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function review(requestId: string, status: 'APPROVED' | 'REJECTED') {
+    if (!session?.accessToken) return;
+
+    setReviewingId(requestId);
+    setError(null);
+
+    try {
+      await apiFetch(`/approval/operator-sections/${requestId}/review`, {
+        method: 'POST',
+        accessToken: session.accessToken,
+        body: JSON.stringify({ status }),
+      });
+
+      await load();
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : '운영자 구역 승인 요청 처리에 실패했습니다.',
+      );
+    } finally {
+      setReviewingId(null);
+    }
+  }
+
+  return (
+    <main className="space-y-6 p-6 w-full max-w-none">
+      <div>
+        <h1 className="text-2xl font-semibold">운영자 구역 권한 승인</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          운영자의 주차 구역 접근 권한 승인 요청을 검토합니다.
+        </p>
+      </div>
+
+      {error ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {error}
+        </div>
+      ) : null}
+
+      {loading ? (
+        <div className="text-sm text-slate-500">불러오는 중...</div>
+      ) : null}
+
+      <section className="overflow-hidden rounded-2xl border bg-white w-full max-w-none">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-slate-50 text-slate-600">
+            <tr>
+              <th className="px-4 py-3">번호</th>
+              <th className="px-4 py-3">신청자</th>
+              <th className="px-4 py-3">이메일</th>
+              <th className="px-4 py-3">주차장</th>
+              <th className="px-4 py-3">구역</th>
+              <th className="px-4 py-3">상태</th>
+              <th className="px-4 py-3">생성일</th>
+              <th className="px-4 py-3">처리</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {items.map((item, index) => (
+              <tr key={item.id} className="border-t">
+                <td className="px-4 py-3">{index + 1}</td>
+                <td className="px-4 py-3">
+                  {item.requester?.name ?? item.name ?? '-'}
+                </td>
+                <td className="px-4 py-3">
+                  {item.requester?.email ?? item.email ?? '-'}
+                </td>
+                <td className="px-4 py-3">
+                  {item.parkingLot?.name ??
+                    item.parkingLot?.code ??
+                    item.requestedParkingLotId ??
+                    '-'}
+                </td>
+                <td className="px-4 py-3">
+                  {item.parkingSection?.name ??
+                    item.parkingSection?.code ??
+                    item.requestedSectionId ??
+                    '-'}
+                </td>
+                <td className="px-4 py-3">{statusLabel(item.status)}</td>
+                <td className="px-4 py-3">{formatDate(item.createdAt)}</td>
+                <td className="px-4 py-3">
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={reviewingId === item.id}
+                      onClick={() => review(item.id, 'APPROVED')}
+                      className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50"
+                    >
+                      승인
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={reviewingId === item.id}
+                      onClick={() => review(item.id, 'REJECTED')}
+                      className="rounded-xl border px-3 py-2 text-xs font-medium text-slate-700 disabled:opacity-50"
+                    >
+                      반려
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+
+            {!loading && items.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={8}
+                  className="px-4 py-10 text-center text-slate-500"
+                >
+                  대기 중인 운영자 구역 권한 승인 요청이 없습니다.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </section>
+    </main>
+  );
+}
