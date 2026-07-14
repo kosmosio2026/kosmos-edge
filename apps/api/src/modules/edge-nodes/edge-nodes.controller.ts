@@ -37,6 +37,15 @@ export class EdgeNodesController {
   }
 
 
+  @Get(':id/runtime-status')
+  runtimeStatus(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser | undefined,
+  ) {
+    return this.edgeNodesService.runtimeStatus(user, id);
+  }
+
+
   @Get(':id/audit-logs')
   listAuditLogs(
     @Param('id') id: string,

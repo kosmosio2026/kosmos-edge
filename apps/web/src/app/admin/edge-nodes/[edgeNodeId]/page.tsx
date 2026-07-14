@@ -97,6 +97,54 @@ type IssueKeyResponse = {
   warning?: string;
 };
 
+type SyncOutboxIssue = {
+  id: string;
+  eventId: string;
+  eventType: string;
+  destination: string;
+  status: string;
+  retryCount: number;
+  lastError: string | null;
+  nextRetryAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type EdgeNodeRuntimeStatus = {
+  edgeNode: {
+    id: string;
+    code: string;
+    name: string;
+    status: string;
+    appVersion: string | null;
+    lastSeenAt: string | null;
+    lastConnectedAt: string | null;
+    lastSyncAt: string | null;
+  };
+  connection: {
+    status: 'ONLINE' | 'STALE' | 'OFFLINE' | 'UNKNOWN' | string;
+    secondsSinceLastSeen: number | null;
+    checkedAt: string;
+  };
+  cloudKeys: {
+    activeCount: number;
+    revokedCount: number;
+    totalCount: number;
+  };
+  cloudOutbox: {
+    destination: string;
+    pendingCount: number;
+    failedCount: number;
+    recentIssues: SyncOutboxIssue[];
+  };
+  notes?: string[];
+};
+
+type EdgeNodeRuntimeStatusResponse = {
+  ok: boolean;
+  item: EdgeNodeRuntimeStatus;
+};
+
 function buildEdgeEnvBlock(item: EdgeNodeItem, apiKey: string) {
   const cloudApiBaseUrl =
     process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/api\/?$/, '/api') ??
@@ -124,6 +172,184 @@ function formatDate(value?: string | null) {
     timeZone: 'Asia/Seoul',
     hour12: false,
   });
+}
+
+
+function connectionStatusClassName(status: string) {
+  if (status === 'ONLINE') return 'bg-emerald-50 text-emerald-700';
+  if (status === 'STALE') return 'bg-amber-50 text-amber-700';
+  if (status === 'OFFLINE') return 'bg-red-50 text-red-700';
+  return 'bg-slate-100 text-slate-600';
+}
+
+function formatElapsedSeconds(value: number | null) {
+  if (value === null) return '-';
+
+  if (value < 60) return `${value}초 전`;
+
+  const minutes = Math.floor(value / 60);
+  if (minutes < 60) return `${minutes}분 전`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}시간 전`;
+
+  const days = Math.floor(hours / 24);
+  return `${days}일 전`;
+}
+
+function EdgeNodeRuntimeStatusCard({
+  status,
+  loading,
+  error,
+  onRefresh,
+}: {
+  status: EdgeNodeRuntimeStatus | null;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+            Runtime Status
+          </p>
+          <h2 className="mt-1 font-semibold">Edge 운영 상태</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Cloud DB 기준의 Edge 연결, API Key, Cloud → Edge SyncOutbox 상태입니다.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          className="rounded-xl border border-slate-300 px-3 py-2 text-xs font-medium hover:bg-slate-50 disabled:opacity-50"
+        >
+          {loading ? '갱신 중...' : '상태 새로고침'}
+        </button>
+      </div>
+
+      {error ? (
+        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          {error}
+        </div>
+      ) : null}
+
+      {!status && !error ? (
+        <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-500">
+          {loading ? '운영 상태를 불러오는 중...' : '운영 상태 데이터가 없습니다.'}
+        </div>
+      ) : null}
+
+      {status ? (
+        <>
+          <div className="mt-5 grid gap-3 md:grid-cols-4">
+            <div className="rounded-xl bg-slate-50 p-4">
+              <div className="text-xs text-slate-500">연결 상태</div>
+              <div className="mt-2">
+                <span
+                  className={`rounded-full px-2 py-1 text-xs font-semibold ${connectionStatusClassName(
+                    status.connection.status,
+                  )}`}
+                >
+                  {status.connection.status}
+                </span>
+              </div>
+              <div className="mt-2 text-xs text-slate-500">
+                Last Seen {formatElapsedSeconds(status.connection.secondsSinceLastSeen)}
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-slate-50 p-4">
+              <div className="text-xs text-slate-500">Cloud Active Key</div>
+              <div className="mt-1 text-2xl font-bold">{status.cloudKeys.activeCount}</div>
+              <div className="mt-1 text-xs text-slate-500">
+                revoked {status.cloudKeys.revokedCount} / total {status.cloudKeys.totalCount}
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-slate-50 p-4">
+              <div className="text-xs text-slate-500">Cloud → Edge Pending</div>
+              <div className="mt-1 text-2xl font-bold">{status.cloudOutbox.pendingCount}</div>
+              <div className="mt-1 text-xs text-slate-500">{status.cloudOutbox.destination}</div>
+            </div>
+
+            <div className="rounded-xl bg-slate-50 p-4">
+              <div className="text-xs text-slate-500">Cloud → Edge Failed</div>
+              <div className="mt-1 text-2xl font-bold">{status.cloudOutbox.failedCount}</div>
+              <div className="mt-1 text-xs text-slate-500">
+                checked {formatDate(status.connection.checkedAt)}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 text-sm md:grid-cols-3">
+            <div className="rounded-xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Last Seen</div>
+              <div className="mt-1">{formatDate(status.edgeNode.lastSeenAt)}</div>
+            </div>
+            <div className="rounded-xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Last Connected</div>
+              <div className="mt-1">{formatDate(status.edgeNode.lastConnectedAt)}</div>
+            </div>
+            <div className="rounded-xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Last Sync</div>
+              <div className="mt-1">{formatDate(status.edgeNode.lastSyncAt)}</div>
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <div className="mb-2 text-sm font-semibold">최근 Cloud → Edge 대기/실패 메시지</div>
+            {status.cloudOutbox.recentIssues.length === 0 ? (
+              <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">
+                최근 대기/실패 메시지가 없습니다.
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="min-w-full divide-y divide-slate-200 text-xs">
+                  <thead className="bg-slate-50 text-left text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2">Event</th>
+                      <th className="px-3 py-2">Status</th>
+                      <th className="px-3 py-2">Retry</th>
+                      <th className="px-3 py-2">Error</th>
+                      <th className="px-3 py-2">Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {status.cloudOutbox.recentIssues.map((issue) => (
+                      <tr key={issue.id}>
+                        <td className="px-3 py-2">
+                          <div className="font-medium">{issue.eventType}</div>
+                          <div className="text-slate-400">{issue.eventId}</div>
+                        </td>
+                        <td className="px-3 py-2">{issue.status}</td>
+                        <td className="px-3 py-2">{issue.retryCount}</td>
+                        <td className="max-w-md px-3 py-2 text-slate-500">
+                          {issue.lastError ?? '-'}
+                        </td>
+                        <td className="px-3 py-2 text-slate-500">{formatDate(issue.updatedAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {status.notes?.length ? (
+            <div className="mt-4 rounded-xl bg-slate-50 p-4 text-xs text-slate-500">
+              {status.notes.map((note) => (
+                <div key={note}>- {note}</div>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </section>
+  );
 }
 
 
@@ -257,6 +483,29 @@ export default function AdminEdgeNodeDetailPage() {
     apiKey: string;
   } | null>(null);
   const [preserveExistingKeys, setPreserveExistingKeys] = useState(false);
+  const [runtimeStatus, setRuntimeStatus] = useState<EdgeNodeRuntimeStatus | null>(null);
+  const [runtimeLoading, setRuntimeLoading] = useState(false);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
+
+  async function loadRuntimeStatus() {
+    if (!edgeNodeId) return;
+
+    setRuntimeLoading(true);
+    setRuntimeError(null);
+
+    try {
+      const data = await apiFetch<EdgeNodeRuntimeStatusResponse>(
+        `/edge-nodes/${edgeNodeId}/runtime-status`,
+      );
+
+      setRuntimeStatus(data.item);
+    } catch (err) {
+      setRuntimeStatus(null);
+      setRuntimeError(err instanceof Error ? err.message : 'Edge 운영 상태를 불러오지 못했습니다.');
+    } finally {
+      setRuntimeLoading(false);
+    }
+  }
 
   async function load() {
     if (!edgeNodeId) return;
@@ -272,6 +521,7 @@ export default function AdminEdgeNodeDetailPage() {
 
       setItem(nodeData.item);
       setParkingLots(lotData.items ?? []);
+      await loadRuntimeStatus();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Edge 노드 상세 정보를 불러오지 못했습니다.');
     } finally {
@@ -459,6 +709,13 @@ export default function AdminEdgeNodeDetailPage() {
             <div>Last Sync: {formatDate(item.lastSyncAt)}</div>
           </div>
         </header>
+
+        <EdgeNodeRuntimeStatusCard
+          status={runtimeStatus}
+          loading={runtimeLoading}
+          error={runtimeError}
+          onRefresh={() => void loadRuntimeStatus()}
+        />
 
         {issuedApiKey ? (
           <section className="rounded-2xl border border-amber-300 bg-amber-50 p-5 text-sm text-amber-950 shadow-sm">
