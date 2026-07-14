@@ -37,7 +37,7 @@ const groupTitles: Record<string, string> = {
   fees: '요금 관리',
   users: '사용자 관리',
   operator: '운영자',
-  billing: '정산/결제',
+  billing: '수금 현황',
   display: '전광판',
   operations: '운영',
   enforcement: '주차 단속/등록',
@@ -58,7 +58,7 @@ export function AppSidebar() {
   return (
     <aside className="hidden w-72 shrink-0 border-r border-slate-200 bg-slate-950 text-slate-100 md:block">
       <div className="border-b border-slate-800 px-6 py-5">
-        <div className="text-lg font-semibold">Kosmos Parking</div>
+        <div className="text-lg font-semibold">KOSMOS 주차관제 서비스</div>
         <div className="mt-1 text-xs text-slate-400">
           {session?.user?.roles?.join(', ') ?? 'Guest'}
         </div>
