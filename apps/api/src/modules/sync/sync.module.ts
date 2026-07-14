@@ -6,11 +6,13 @@ import { EdgeCloudPushWorkerService } from './edge-cloud-push-worker.service';
 import { EdgeSyncWorkerService } from './edge-sync-worker.service';
 import { SyncController } from './sync.controller';
 import { SyncService } from './sync.service';
+import { EdgeLocalKeyBootstrapService } from './edge-local-key-bootstrap.service';
 
 @Module({
   imports: [PrismaModule, InvoicesModule],
   controllers: [SyncController],
   providers: [
+    EdgeLocalKeyBootstrapService,
     SyncService,
     EdgeApiKeyGuard,
     EdgeSyncWorkerService,
