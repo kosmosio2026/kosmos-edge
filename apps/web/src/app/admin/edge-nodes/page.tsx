@@ -149,6 +149,7 @@ export default function AdminEdgeNodesPage() {
     keyId: string;
     apiKey: string;
   } | null>(null);
+  const [preserveExistingKeys, setPreserveExistingKeys] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -297,7 +298,16 @@ export default function AdminEdgeNodesPage() {
   }
 
   async function issueKey(item: EdgeNodeItem) {
-    if (!confirm(`${item.name} API Key를 새로 발급할까요? 키 원문은 한 번만 표시됩니다.`)) {
+    const revokeExistingActiveKeys = !preserveExistingKeys;
+    const rotationModeLabel = revokeExistingActiveKeys
+      ? '기존 active key를 즉시 폐기하고 새 key를 발급합니다.'
+      : '기존 active key를 유지한 채 새 key를 추가 발급합니다.';
+
+    if (
+      !confirm(
+        `${item.name} API Key를 새로 발급할까요?\n\n${rotationModeLabel}\n\n키 원문은 한 번만 표시됩니다.`,
+      )
+    ) {
       return;
     }
 
@@ -311,7 +321,7 @@ export default function AdminEdgeNodesPage() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ revokeExistingActiveKeys }),
       });
 
       setIssuedApiKey({
@@ -670,6 +680,20 @@ export default function AdminEdgeNodesPage() {
                             >
                               수정
                             </button>
+
+                            <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-2 text-[11px] leading-snug text-amber-900">
+                              <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                checked={preserveExistingKeys}
+                                onChange={(event) => setPreserveExistingKeys(event.target.checked)}
+                              />
+                              <span>
+                                기존 active API Key 유지
+                                <br />
+                                <span className="text-amber-700">무중단 회전 시 사용</span>
+                              </span>
+                            </label>
 
                             <button
                               type="button"
