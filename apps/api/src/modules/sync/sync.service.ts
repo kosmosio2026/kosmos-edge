@@ -1866,6 +1866,38 @@ export class SyncService {
           ...metadata,
           cloudInvoiceSyncedAt: new Date().toISOString(),
           cloudInvoiceSyncEventType: message.eventType,
+
+          /*
+           * Cloud가 발급한 공식 결제·수금 Invoice.
+           */
+          cloudInvoiceId:
+            this.stringValue(payload.invoiceId) ??
+            metadata.cloudInvoiceId ??
+            null,
+          cloudInvoiceNo:
+            this.stringValue(payload.invoiceNo) ??
+            metadata.cloudInvoiceNo ??
+            null,
+          cloudInvoiceStatus:
+            this.stringValue(payload.invoiceStatus) ??
+            metadata.cloudInvoiceStatus ??
+            null,
+          cloudInvoiceAmount:
+            this.numberValue(payload.invoiceAmount) ??
+            metadata.cloudInvoiceAmount ??
+            null,
+          cloudInvoicePaidAmount:
+            invoicePaidAmount ??
+            metadata.cloudInvoicePaidAmount ??
+            null,
+          cloudInvoiceUnpaidAmount:
+            invoiceUnpaidAmount ??
+            metadata.cloudInvoiceUnpaidAmount ??
+            null,
+
+          /*
+           * 기존 결제 코드 호환용 공식 Invoice 필드.
+           */
           invoiceId:
             this.stringValue(payload.invoiceId) ??
             metadata.invoiceId ??
@@ -1888,7 +1920,9 @@ export class SyncService {
             invoiceUnpaidAmount ?? metadata.invoiceUnpaidAmount ?? null,
           paymentStatus,
           paymentRequired: (invoiceUnpaidAmount ?? 0) > 0,
-          invoiceCreatedAtEdge: false,
+          invoiceCreatedAtEdge:
+            Boolean(metadata.edgeInvoiceId) ||
+            metadata.invoiceCreatedAtEdge === true,
           invoiceSyncRequired: false,
           cloudSessionId:
             this.stringValue(payload.cloudSessionId) ??
@@ -1985,6 +2019,38 @@ export class SyncService {
           ...metadata,
           cloudInvoicePaymentSyncedAt: new Date().toISOString(),
           cloudInvoiceSyncEventType: message.eventType,
+
+          /*
+           * Cloud가 발급한 공식 결제·수금 Invoice.
+           */
+          cloudInvoiceId:
+            this.stringValue(payload.invoiceId) ??
+            metadata.cloudInvoiceId ??
+            null,
+          cloudInvoiceNo:
+            this.stringValue(payload.invoiceNo) ??
+            metadata.cloudInvoiceNo ??
+            null,
+          cloudInvoiceStatus:
+            this.stringValue(payload.invoiceStatus) ??
+            metadata.cloudInvoiceStatus ??
+            null,
+          cloudInvoiceAmount:
+            this.numberValue(payload.invoiceAmount) ??
+            metadata.cloudInvoiceAmount ??
+            null,
+          cloudInvoicePaidAmount:
+            invoicePaidAmount ??
+            metadata.cloudInvoicePaidAmount ??
+            null,
+          cloudInvoiceUnpaidAmount:
+            invoiceUnpaidAmount ??
+            metadata.cloudInvoiceUnpaidAmount ??
+            null,
+
+          /*
+           * 기존 결제 코드 호환용 공식 Invoice 필드.
+           */
           invoiceId:
             this.stringValue(payload.invoiceId) ??
             metadata.invoiceId ??
@@ -3226,6 +3292,15 @@ export class SyncService {
   }) {
     const payload = this.normalizeUnpaidExitPayload(input.payload);
 
+    /*
+     * Edge에서 산출된 로컬 Invoice.
+     * Cloud 공식 Invoice와 별도 식별자로 보존한다.
+     */
+    const edgeInvoice =
+      this.asRecord(
+        input.payload.edgeInvoice,
+      );
+
     if (!payload.sessionId && !payload.sessionNo) {
       throw new BadRequestException(
         'Edge unpaid exit event requires sessionId or sessionNo',
@@ -3253,6 +3328,85 @@ export class SyncService {
     );
 
     if (existingInvoice && existingInvoice.unpaidAmount > 0) {
+      const existingSessionMetadata =
+        this.asRecord(
+          session.metadata,
+        );
+
+      await this.prisma.parkingSession.update({
+        where: {
+          id: session.id,
+        },
+        data: {
+          paidAmount:
+            existingInvoice.paidAmount,
+          unpaidAmount:
+            existingInvoice.unpaidAmount,
+          metadata: {
+            ...existingSessionMetadata,
+
+            edgeInvoiceId:
+              this.stringValue(edgeInvoice.id) ??
+              existingSessionMetadata.edgeInvoiceId ??
+              null,
+            edgeInvoiceNo:
+              this.stringValue(edgeInvoice.invoiceNo) ??
+              existingSessionMetadata.edgeInvoiceNo ??
+              null,
+            edgeInvoiceStatus:
+              this.stringValue(edgeInvoice.status) ??
+              existingSessionMetadata.edgeInvoiceStatus ??
+              null,
+            edgeInvoiceAmount:
+              this.numberValue(edgeInvoice.amount) ??
+              existingSessionMetadata.edgeInvoiceAmount ??
+              null,
+            edgeInvoicePaidAmount:
+              this.numberValue(edgeInvoice.paidAmount) ??
+              existingSessionMetadata.edgeInvoicePaidAmount ??
+              null,
+            edgeInvoiceUnpaidAmount:
+              this.numberValue(edgeInvoice.unpaidAmount) ??
+              existingSessionMetadata.edgeInvoiceUnpaidAmount ??
+              null,
+
+            cloudInvoiceId:
+              existingInvoice.id,
+            cloudInvoiceNo:
+              existingInvoice.invoiceNo,
+            cloudInvoiceStatus:
+              existingInvoice.status,
+            cloudInvoiceAmount:
+              existingInvoice.amount,
+            cloudInvoicePaidAmount:
+              existingInvoice.paidAmount,
+            cloudInvoiceUnpaidAmount:
+              existingInvoice.unpaidAmount,
+
+            invoiceId:
+              existingInvoice.id,
+            invoiceNo:
+              existingInvoice.invoiceNo,
+            invoiceStatus:
+              existingInvoice.status,
+            invoiceAmount:
+              existingInvoice.amount,
+            invoicePaidAmount:
+              existingInvoice.paidAmount,
+            invoiceUnpaidAmount:
+              existingInvoice.unpaidAmount,
+
+            invoiceCreatedByCloudSync: true,
+            invoiceCreatedAtEdge:
+              Boolean(
+                this.stringValue(edgeInvoice.id) ??
+                existingSessionMetadata.edgeInvoiceId,
+              ),
+            invoiceSyncRequired: false,
+          } as any,
+        },
+      });
+
       await this.createCloudToEdgeOutboxMessage({
         edgeNodeId: input.edgeNodeId,
         eventType: 'INVOICE_ALREADY_EXISTS_FROM_CLOUD',
@@ -3315,14 +3469,67 @@ export class SyncService {
           edgeNodeId: input.edgeNodeId,
           syncedFromEdge: true,
           syncedFromEdgeAt: new Date().toISOString(),
-          invoiceId: invoice.id,
-          invoiceNo: invoice.invoiceNo,
-          invoiceStatus: invoice.status,
-          invoiceAmount: invoice.amount,
-          invoicePaidAmount: invoice.paidAmount,
-          invoiceUnpaidAmount: invoice.unpaidAmount,
+
+          edgeInvoiceId:
+            this.stringValue(edgeInvoice.id) ??
+            sessionMetadata.edgeInvoiceId ??
+            null,
+          edgeInvoiceNo:
+            this.stringValue(edgeInvoice.invoiceNo) ??
+            sessionMetadata.edgeInvoiceNo ??
+            null,
+          edgeInvoiceStatus:
+            this.stringValue(edgeInvoice.status) ??
+            sessionMetadata.edgeInvoiceStatus ??
+            null,
+          edgeInvoiceAmount:
+            this.numberValue(edgeInvoice.amount) ??
+            sessionMetadata.edgeInvoiceAmount ??
+            null,
+          edgeInvoicePaidAmount:
+            this.numberValue(edgeInvoice.paidAmount) ??
+            sessionMetadata.edgeInvoicePaidAmount ??
+            null,
+          edgeInvoiceUnpaidAmount:
+            this.numberValue(edgeInvoice.unpaidAmount) ??
+            sessionMetadata.edgeInvoiceUnpaidAmount ??
+            null,
+
+          cloudInvoiceId:
+            invoice.id,
+          cloudInvoiceNo:
+            invoice.invoiceNo,
+          cloudInvoiceStatus:
+            invoice.status,
+          cloudInvoiceAmount:
+            invoice.amount,
+          cloudInvoicePaidAmount:
+            invoice.paidAmount,
+          cloudInvoiceUnpaidAmount:
+            invoice.unpaidAmount,
+
+          /*
+           * 기존 UI 및 결제 서비스 호환용 공식 Cloud Invoice.
+           */
+          invoiceId:
+            invoice.id,
+          invoiceNo:
+            invoice.invoiceNo,
+          invoiceStatus:
+            invoice.status,
+          invoiceAmount:
+            invoice.amount,
+          invoicePaidAmount:
+            invoice.paidAmount,
+          invoiceUnpaidAmount:
+            invoice.unpaidAmount,
+
           invoiceCreatedByCloudSync: true,
-          invoiceCreatedAtEdge: false,
+          invoiceCreatedAtEdge:
+            Boolean(
+              this.stringValue(edgeInvoice.id) ??
+              sessionMetadata.edgeInvoiceId,
+            ),
           invoiceSyncRequired: false,
           feeCalculation: calculation,
         } as any,

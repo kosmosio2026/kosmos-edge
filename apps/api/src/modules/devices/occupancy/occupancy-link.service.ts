@@ -176,42 +176,12 @@ export class OccupancyLinkService {
       Math.ceil((exitTime.getTime() - entryTime.getTime()) / 1000 / 60),
     );
 
-    const updated = await this.prisma.$transaction(
-      async (tx: Prisma.TransactionClient) => {
-        const session = await tx.parkingSession.update({
-          where: { id: activeSession.id },
-          data: {
-            status: SessionStatus.CLOSED,
-            exitSource: 'SENSOR',
-            exitTime,
-            billingClosedAt: exitTime,
-            totalMinutes,
-          },
-        });
-
-        await tx.parkingSessionEvent.create({
-          data: {
-            sessionId: session.id,
-            type: 'vehicle.exited.by.sensor',
-            source: 'sensor',
-            payload: {
-              sensorDeviceId,
-              devEui: device.devEui,
-              parkingSpaceId,
-              totalMinutes,
-            } as any,
-          },
-        });
-
-        await tx.parkingSpace.update({
-          where: { id: parkingSpaceId },
-          data: { status: SpaceStatus.EMPTY },
-        });
-
-        return session;
-      },
-    );
-
+    /**
+     * 먼저 요금과 Invoice 계산을 완료한다.
+     *
+     * 이 과정이 실패하면 세션과 주차면은 아직
+     * ACTIVE / OCCUPIED 상태이므로 부분 종료가 발생하지 않는다.
+     */
     const {
       invoice,
       calculation,
@@ -220,77 +190,173 @@ export class OccupancyLinkService {
       exitGraceMinutes,
       exitGraceDeadline,
     } = await this.invoicesService.ensureAdditionalFeeForGraceExpiredSession({
-      sessionId: updated.id,
-      now: exitTime,
+      sessionId:
+        activeSession.id,
+      now:
+        exitTime,
     });
 
-    const updatedWithBilling = await this.prisma.parkingSession.update({
-      where: { id: updated.id },
-      data: {
-        amount: invoice.amount,
-        paidAmount: invoice.paidAmount,
-        unpaidAmount: invoice.unpaidAmount,
-        feePolicyId: (calculation as any).policyId ?? null,
-        metadata: {
-          ...((updated.metadata as any) ?? {}),
-          paymentRequired: invoice.unpaidAmount > 0,
-          paymentStatus:
-            invoice.unpaidAmount <= 0
-              ? 'PAID'
-              : invoice.paidAmount > 0
-                ? 'PARTIALLY_PAID'
-                : 'UNPAID',
-          exitedUnpaid: invoice.unpaidAmount > 0,
-          invoiceId: invoice.id,
-          invoiceNo: invoice.invoiceNo,
-          invoiceStatus: invoice.status,
-          invoiceAmount: invoice.amount,
-          invoicePaidAmount: invoice.paidAmount,
-          invoiceUnpaidAmount: invoice.unpaidAmount,
-          additionalFeeAmount,
-          additionalFeeReason,
-          exitGraceMinutes,
-          exitGraceDeadline,
-          feeCalculation: calculation,
-        } as any,
-      },
-    });
+    const nextMetadata = {
+      ...((activeSession.metadata as any) ?? {}),
+      paymentRequired:
+        invoice.unpaidAmount > 0,
+      paymentStatus:
+        invoice.unpaidAmount <= 0
+          ? 'PAID'
+          : invoice.paidAmount > 0
+            ? 'PARTIALLY_PAID'
+            : 'UNPAID',
+      exitedUnpaid:
+        invoice.unpaidAmount > 0,
+      /*
+       * Edge에서 산출한 로컬 Invoice.
+       * Cloud 공식 Invoice가 회신된 후에도 이 값은 보존한다.
+       */
+      edgeInvoiceId:
+        invoice.id,
+      edgeInvoiceNo:
+        invoice.invoiceNo,
+      edgeInvoiceStatus:
+        invoice.status,
+      edgeInvoiceAmount:
+        invoice.amount,
+      edgeInvoicePaidAmount:
+        invoice.paidAmount,
+      edgeInvoiceUnpaidAmount:
+        invoice.unpaidAmount,
 
-    await enqueueEdgeParkingSessionSync(
-      this.prisma,
-      {
-        eventType:
-          'PARKING_SESSION_EXITED_FROM_EDGE',
-        session:
-          updatedWithBilling,
-        invoice,
+      /*
+       * 기존 호환 필드.
+       * Cloud Invoice 회신 전에는 Edge Invoice를 가리키며,
+       * 회신 후에는 Cloud 공식 Invoice 값으로 교체된다.
+       */
+      invoiceId:
+        invoice.id,
+      invoiceNo:
+        invoice.invoiceNo,
+      invoiceStatus:
+        invoice.status,
+      invoiceAmount:
+        invoice.amount,
+      invoicePaidAmount:
+        invoice.paidAmount,
+      invoiceUnpaidAmount:
+        invoice.unpaidAmount,
+      additionalFeeAmount,
+      additionalFeeReason,
+      exitGraceMinutes,
+      exitGraceDeadline,
+      feeCalculation:
         calculation,
-        source:
-          'OCCUPANCY_LINK',
-        sensorDeviceId,
-        devEui:
-          device.devEui,
-      },
-    );
+    };
 
-    if (invoice.unpaidAmount > 0) {
-      await enqueueEdgeUnpaidExitSync(
-        this.prisma,
-        {
-          session:
-            updatedWithBilling,
-          invoice,
-          calculation,
-          additionalFeeAmount,
-          additionalFeeReason,
-          source:
-            'OCCUPANCY_LINK',
-          sensorDeviceId,
-          devEui:
-            device.devEui,
+    /**
+     * 세션 종료, 감사 이벤트, 주차면 상태,
+     * Edge 동기화 Outbox를 하나의 트랜잭션에 저장한다.
+     */
+    const updatedWithBilling =
+      await this.prisma.$transaction(
+        async (
+          tx: Prisma.TransactionClient,
+        ) => {
+          const updated =
+            await tx.parkingSession.update({
+              where: {
+                id:
+                  activeSession.id,
+              },
+              data: {
+                status:
+                  SessionStatus.CLOSED,
+                exitSource:
+                  'SENSOR',
+                exitTime,
+                billingClosedAt:
+                  exitTime,
+                totalMinutes,
+                amount:
+                  invoice.amount,
+                paidAmount:
+                  invoice.paidAmount,
+                unpaidAmount:
+                  invoice.unpaidAmount,
+                feePolicyId:
+                  (calculation as any)
+                    .policyId ??
+                  null,
+                metadata:
+                  nextMetadata as any,
+              },
+            });
+
+          await tx.parkingSessionEvent.create({
+            data: {
+              sessionId:
+                updated.id,
+              type:
+                'vehicle.exited.by.sensor',
+              source:
+                'sensor',
+              payload: {
+                sensorDeviceId,
+                devEui:
+                  device.devEui,
+                parkingSpaceId,
+                totalMinutes,
+              } as any,
+            },
+          });
+
+          await tx.parkingSpace.update({
+            where: {
+              id:
+                parkingSpaceId,
+            },
+            data: {
+              status:
+                SpaceStatus.EMPTY,
+            },
+          });
+
+          await enqueueEdgeParkingSessionSync(
+            tx,
+            {
+              eventType:
+                'PARKING_SESSION_EXITED_FROM_EDGE',
+              session:
+                updated,
+              invoice,
+              calculation,
+              source:
+                'OCCUPANCY_LINK',
+              sensorDeviceId,
+              devEui:
+                device.devEui,
+            },
+          );
+
+          if (invoice.unpaidAmount > 0) {
+            await enqueueEdgeUnpaidExitSync(
+              tx,
+              {
+                session:
+                  updated,
+                invoice,
+                calculation,
+                additionalFeeAmount,
+                additionalFeeReason,
+                source:
+                  'OCCUPANCY_LINK',
+                sensorDeviceId,
+                devEui:
+                  device.devEui,
+              },
+            );
+          }
+
+          return updated;
         },
       );
-    }
 
     return {
       ok: true,

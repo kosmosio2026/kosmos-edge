@@ -630,9 +630,8 @@ export async function enqueueEdgeUnpaidExitSync(
     source: input.source,
   };
 
-  const created =
-    await prisma.$transaction(
-      async (tx: any) => {
+  const createRecords =
+    async (tx: any) => {
         await tx.parkingSession.update({
           where: {
             id: session.id,
@@ -645,8 +644,38 @@ export async function enqueueEdgeUnpaidExitSync(
             metadata: {
               ...metadata,
               invoiceSyncRequired: true,
+
+              edgeInvoiceId:
+                invoice?.id ??
+                metadata.edgeInvoiceId ??
+                null,
+              edgeInvoiceNo:
+                invoice?.invoiceNo ??
+                metadata.edgeInvoiceNo ??
+                null,
+              edgeInvoiceStatus:
+                invoice?.status ??
+                metadata.edgeInvoiceStatus ??
+                null,
+              edgeInvoiceAmount:
+                invoice?.amount ??
+                metadata.edgeInvoiceAmount ??
+                null,
+              edgeInvoicePaidAmount:
+                invoice?.paidAmount ??
+                metadata.edgeInvoicePaidAmount ??
+                null,
+              edgeInvoiceUnpaidAmount:
+                invoice?.unpaidAmount ??
+                metadata.edgeInvoiceUnpaidAmount ??
+                null,
+
               invoiceCreatedAtEdge:
-                Boolean(invoice?.id),
+                Boolean(
+                  invoice?.id ??
+                  metadata.edgeInvoiceId,
+                ),
+
               cloudInvoiceSyncedAt: null,
               cloudInvoiceSyncEventType:
                 'PARKING_SESSION_EXITED_UNPAID_EDGE_SYNC_REQUIRED',
@@ -699,8 +728,14 @@ export async function enqueueEdgeUnpaidExitSync(
             outboxes: true,
           },
         });
-      },
-    );
+    };
+
+  const created =
+    typeof prisma.$transaction === 'function'
+      ? await prisma.$transaction(
+          createRecords,
+        )
+      : await createRecords(prisma);
 
   return {
     created: true,
