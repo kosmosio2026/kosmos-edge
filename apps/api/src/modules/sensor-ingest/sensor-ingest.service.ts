@@ -149,6 +149,7 @@ export class SensorIngestService {
     const existingSession = await this.prisma.parkingSession.findFirst({
       where: {
         parkingSpaceId: input.parkingSpaceId,
+        exitTime: null,
         status: {
           in: ACTIVE_SESSION_STATUSES as any,
         },
@@ -283,6 +284,7 @@ export class SensorIngestService {
     const activeSession = await this.prisma.parkingSession.findFirst({
       where: {
         parkingSpaceId: input.parkingSpaceId,
+        exitTime: null,
         status: {
           in: ACTIVE_SESSION_STATUSES as any,
         },

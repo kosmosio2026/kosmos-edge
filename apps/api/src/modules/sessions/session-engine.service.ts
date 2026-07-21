@@ -369,6 +369,7 @@ export class SessionEngineService {
     const session = await this.prisma.parkingSession.findFirst({
       where: {
         parkingSpaceId,
+        exitTime: null,
         status: {
           in: [
             SessionStatus.ACTIVE,

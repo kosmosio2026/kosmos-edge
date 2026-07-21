@@ -63,6 +63,7 @@ export class OccupancyLinkService {
     const activeSession = await this.prisma.parkingSession.findFirst({
       where: {
         parkingSpaceId,
+        exitTime: null,
         status: SessionStatus.ACTIVE,
       },
       orderBy: {
