@@ -204,6 +204,7 @@ export class SensorIngestService {
         sessionType: 'HOURLY',
         status: 'CREATED' as any,
         entryTime: input.occurredAt,
+        entrySource: 'SENSOR',
         graceStartedAt: input.occurredAt,
         isRegistered: false,
         metadata: {
