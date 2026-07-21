@@ -32,7 +32,12 @@ type ExitPaymentDecision = {
     | 'ZERO_MINUTES';
 };
 
-const ACTIVE_SESSION_STATUSES = ['ACTIVE', 'GRACE_PERIOD', 'CREATED'];
+const ACTIVE_SESSION_STATUSES = [
+  'ACTIVE',
+  'GRACE_PERIOD',
+  'CREATED',
+  'PAID',
+];
 
 @Injectable()
 export class SensorIngestService {
@@ -343,10 +348,7 @@ export class SensorIngestService {
       invoiceSyncRequired: paymentRequired && !this.isCloudMode(),
     };
 
-    const nextStatus =
-      paymentStatus === 'PAID' && paymentRequired === false
-        ? 'PAID'
-        : 'CLOSED';
+    const nextStatus = 'CLOSED';
 
     const eventType = paymentRequired
       ? 'SENSOR_EMPTY_PAYMENT_REQUIRED'
@@ -361,6 +363,7 @@ export class SensorIngestService {
       data: {
         status: nextStatus as any,
         exitTime: input.occurredAt,
+        exitSource: 'SENSOR',
         totalMinutes,
         metadata: baseMetadata as any,
         events: {
@@ -676,7 +679,11 @@ export class SensorIngestService {
   }
 
   private getAppMode() {
-    return (process.env.APP_MODE ?? 'cloud').toLowerCase();
+    return (
+      process.env.APP_PROFILE ??
+      process.env.APP_MODE ??
+      'cloud'
+    ).toLowerCase();
   }
 
   private isCloudMode() {
