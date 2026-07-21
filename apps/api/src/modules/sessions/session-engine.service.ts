@@ -8,6 +8,10 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { RedisPublisher } from '../../common/redis/redis.publisher';
 import { FeeEngineService } from '../billing/fee-engine.service';
+import {
+  enqueueEdgeParkingSessionSync,
+  enqueueEdgeUnpaidExitSync,
+} from '../../common/sync/edge-parking-session-sync';
 
 @Injectable()
 export class SessionEngineService {
@@ -37,20 +41,49 @@ export class SessionEngineService {
       throw new BadRequestException('Active session already exists');
     }
 
-    const session = await this.prisma.parkingSession.create({
-      data: {
-        sessionNo: `S-${Date.now()}`,
-        parkingSpaceId: input.parkingSpaceId,
-        plateNumber: input.plateNumber ?? null,
-        userId: input.userId ?? null,
-        status: SessionStatus.ACTIVE,
-        entryTime: new Date(),
-        isRegistered: false,
-      },
-      include: {
-        ParkingSpace: true,
-      },
-    });
+    const session =
+      await this.prisma.$transaction(
+        async (tx) => {
+          const created =
+            await tx.parkingSession.create({
+              data: {
+                sessionNo:
+                  `S-${Date.now()}`,
+                parkingSpaceId:
+                  input.parkingSpaceId,
+                plateNumber:
+                  input.plateNumber ??
+                  null,
+                userId:
+                  input.userId ?? null,
+                status:
+                  SessionStatus.ACTIVE,
+                entryTime:
+                  new Date(),
+                entrySource:
+                  'SENSOR',
+                isRegistered:
+                  false,
+              },
+              include: {
+                ParkingSpace: true,
+              },
+            });
+
+          await tx.parkingSpace.update({
+            where: {
+              id:
+                input.parkingSpaceId,
+            },
+            data: {
+              status:
+                SpaceStatus.OCCUPIED,
+            },
+          });
+
+          return created;
+        },
+      );
 
     await this.redis.publish('parking.entry', {
       sessionId: session.id,
@@ -58,6 +91,17 @@ export class SessionEngineService {
       plateNumber: session.plateNumber,
       status: session.status,
     });
+
+    await enqueueEdgeParkingSessionSync(
+      this.prisma,
+      {
+        eventType:
+          'PARKING_SESSION_ENTERED_FROM_EDGE',
+        session,
+        source:
+          'SESSION_ENGINE',
+      },
+    );
 
     return session;
   }
@@ -145,6 +189,9 @@ export class SessionEngineService {
       where: { id: session.id },
       data: {
         status: nextSessionStatus,
+        exitSource:
+          session.exitSource ??
+          'SENSOR',
         exitTime,
         billingClosedAt,
         totalMinutes,
@@ -217,6 +264,36 @@ export class SessionEngineService {
       additionalFeeAmount,
       additionalFeeReason,
     });
+
+    await enqueueEdgeParkingSessionSync(
+      this.prisma,
+      {
+        eventType:
+          'PARKING_SESSION_EXITED_FROM_EDGE',
+        session:
+          updatedWithBilling,
+        invoice,
+        calculation,
+        source:
+          'SESSION_ENGINE',
+      },
+    );
+
+    if (invoice.unpaidAmount > 0) {
+      await enqueueEdgeUnpaidExitSync(
+        this.prisma,
+        {
+          session:
+            updatedWithBilling,
+          invoice,
+          calculation,
+          additionalFeeAmount,
+          additionalFeeReason,
+          source:
+            'SESSION_ENGINE',
+        },
+      );
+    }
 
     return {
       ok: true,

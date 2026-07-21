@@ -110,6 +110,21 @@ export class SyncService {
         },
       });
 
+      if (inbox.status === 'PROCESSED') {
+        results.push({
+          ok: true,
+          eventId: event.eventId ?? null,
+          messageId: inbox.messageId,
+          inboxId: inbox.id,
+          processed: true,
+          action: 'ALREADY_PROCESSED',
+          invoice: null,
+          error: null,
+        });
+
+        continue;
+      }
+
       const processingResult = await this.processEdgeEvent({
         edgeNodeId,
         event,
@@ -219,6 +234,18 @@ export class SyncService {
       case 'INVOICE_PAID_FROM_CLOUD':
       case 'INVOICE_PARTIALLY_PAID_FROM_CLOUD':
         return this.applyInvoicePaymentFromCloud(edgeNodeId, message);
+
+      case 'PARKING_LOT_OPERATION_SNAPSHOT_FROM_CLOUD':
+        return this.applyParkingLotOperationSnapshotFromCloud(
+          edgeNodeId,
+          message,
+        );
+
+      case 'PARKING_LOT_CONFIGURATION_UPDATED_FROM_CLOUD':
+        return this.applyParkingLotConfigurationFromCloud(
+          edgeNodeId,
+          message,
+        );
 
       default:
         return {
@@ -350,6 +377,1449 @@ export class SyncService {
       outboxId: cursor,
       eventType,
       payload,
+    };
+  }
+
+  private async applyParkingLotOperationSnapshotFromCloud(
+    edgeNodeId: string,
+    message: ResolvedCloudMessage,
+  ) {
+    /*
+     * 주차장과 ManagementCompany는 기존 검증된 적용 로직을
+     * 먼저 재사용한다.
+     */
+    const configurationResult =
+      await this.applyParkingLotConfigurationFromCloud(
+        edgeNodeId,
+        message,
+      );
+
+    if (
+      !configurationResult.applied ||
+      !configurationResult.parkingLotId
+    ) {
+      return configurationResult;
+    }
+
+    const payload = message.payload;
+    const localParkingLotId =
+      configurationResult.parkingLotId;
+    const appliedAt = new Date().toISOString();
+
+    const recordArray = (
+      value: unknown,
+    ): Record<string, any>[] => {
+      if (!Array.isArray(value)) {
+        return [];
+      }
+
+      return value.filter(
+        (
+          item,
+        ): item is Record<string, any> =>
+          Boolean(item) &&
+          typeof item === 'object' &&
+          !Array.isArray(item),
+      );
+    };
+
+    const nullableText = (
+      value: unknown,
+    ): string | null => {
+      if (
+        value === null ||
+        value === undefined
+      ) {
+        return null;
+      }
+
+      const normalized =
+        String(value).trim();
+
+      return normalized || null;
+    };
+
+    const requiredText = (
+      value: unknown,
+      label: string,
+    ) => {
+      const normalized =
+        nullableText(value);
+
+      if (!normalized) {
+        throw new BadRequestException(
+          `${label} is required`,
+        );
+      }
+
+      return normalized;
+    };
+
+    const nullableNumber = (
+      value: unknown,
+    ): number | null => {
+      if (
+        typeof value !== 'number' ||
+        !Number.isFinite(value)
+      ) {
+        return null;
+      }
+
+      return value;
+    };
+
+    const requiredNumber = (
+      value: unknown,
+      label: string,
+    ) => {
+      const normalized =
+        nullableNumber(value);
+
+      if (normalized === null) {
+        throw new BadRequestException(
+          `${label} must be a finite number`,
+        );
+      }
+
+      return normalized;
+    };
+
+    const booleanValue = (
+      value: unknown,
+      fallback: boolean,
+    ) =>
+      typeof value === 'boolean'
+        ? value
+        : fallback;
+
+    const nullableDate = (
+      value: unknown,
+      label: string,
+    ): Date | null => {
+      if (
+        value === null ||
+        value === undefined ||
+        value === ''
+      ) {
+        return null;
+      }
+
+      const parsed =
+        new Date(String(value));
+
+      if (Number.isNaN(parsed.getTime())) {
+        throw new BadRequestException(
+          `${label} must be a valid date`,
+        );
+      }
+
+      return parsed;
+    };
+
+    const sections =
+      recordArray(payload.sections);
+    const spaces =
+      recordArray(payload.spaces);
+    const sensorDevices =
+      recordArray(payload.sensorDevices);
+    const feePolicies =
+      recordArray(payload.feePolicies);
+    const eligibilityDefinitions =
+      recordArray(
+        payload.discountEligibilityDefinitions,
+      );
+    const discountPrograms =
+      recordArray(payload.discountPrograms);
+
+    const result =
+      await this.prisma.$transaction(
+        async (tx) => {
+          const sectionIdMap =
+            new Map<string, string>();
+          const spaceIdMap =
+            new Map<string, string>();
+          const spaceSectionIdMap =
+            new Map<string, string>();
+          const eligibilityIdMap =
+            new Map<string, string>();
+
+          const syncedSectionIds: string[] = [];
+          const syncedSpaceIds: string[] = [];
+          const syncedSensorIds: string[] = [];
+          const syncedFeePolicyIds: string[] = [];
+          const syncedDiscountProgramIds:
+            string[] = [];
+
+          /*
+           * 1. ParkingSection
+           */
+          for (const item of sections) {
+            const cloudSectionId =
+              requiredText(
+                item.id,
+                'ParkingSection.id',
+              );
+            const name =
+              requiredText(
+                item.name,
+                'ParkingSection.name',
+              );
+            const code =
+              nullableText(item.code);
+
+            const orConditions:
+              Array<Record<string, any>> = [
+                {
+                  id: cloudSectionId,
+                },
+              ];
+
+            if (code) {
+              orConditions.push({
+                parkingLotId:
+                  localParkingLotId,
+                code,
+              });
+            }
+
+            const existing =
+              await tx.parkingSection.findFirst({
+                where: {
+                  OR: orConditions,
+                },
+              });
+
+            const sectionData:
+              Record<string, any> = {
+                parkingLotId:
+                  localParkingLotId,
+                name,
+                code,
+                centerLat:
+                  nullableNumber(
+                    item.centerLat,
+                  ),
+                centerLng:
+                  nullableNumber(
+                    item.centerLng,
+                  ),
+                isActive:
+                  booleanValue(
+                    item.isActive,
+                    true,
+                  ),
+              };
+
+            if (
+              item.polygonJson !== null &&
+              item.polygonJson !== undefined
+            ) {
+              sectionData.polygonJson =
+                item.polygonJson;
+            }
+
+            const saved = existing
+              ? await tx.parkingSection.update({
+                  where: {
+                    id: existing.id,
+                  },
+                  data: sectionData,
+                })
+              : await tx.parkingSection.create({
+                  data: {
+                    id: cloudSectionId,
+                    ...sectionData,
+                  } as any,
+                });
+
+            sectionIdMap.set(
+              cloudSectionId,
+              saved.id,
+            );
+            syncedSectionIds.push(saved.id);
+          }
+
+          /*
+           * Snapshot에 없는 구역은 삭제하지 않고 비활성화한다.
+           */
+          await tx.parkingSection.updateMany({
+            where: {
+              parkingLotId:
+                localParkingLotId,
+              ...(syncedSectionIds.length > 0
+                ? {
+                    id: {
+                      notIn:
+                        syncedSectionIds,
+                    },
+                  }
+                : {}),
+            },
+            data: {
+              isActive: false,
+            },
+          });
+
+          /*
+           * 2. ParkingSpace
+           *
+           * status 필드는 의도적으로 update/create payload에서
+           * 제외하거나 신규 생성 시 EMPTY만 사용한다.
+           */
+          for (const item of spaces) {
+            const cloudSpaceId =
+              requiredText(
+                item.id,
+                'ParkingSpace.id',
+              );
+            const cloudSectionId =
+              requiredText(
+                item.sectionId,
+                'ParkingSpace.sectionId',
+              );
+            const localSectionId =
+              sectionIdMap.get(
+                cloudSectionId,
+              );
+
+            if (!localSectionId) {
+              throw new BadRequestException(
+                `Snapshot section mapping not found: ${cloudSectionId}`,
+              );
+            }
+
+            const code =
+              requiredText(
+                item.code,
+                'ParkingSpace.code',
+              );
+
+            const existing =
+              await tx.parkingSpace.findFirst({
+                where: {
+                  OR: [
+                    {
+                      id: cloudSpaceId,
+                    },
+                    {
+                      sectionId:
+                        localSectionId,
+                      code,
+                    },
+                  ],
+                },
+              });
+
+            const spaceData:
+              Record<string, any> = {
+                sectionId:
+                  localSectionId,
+                code,
+                number:
+                  nullableText(item.number),
+                type:
+                  requiredText(
+                    item.type,
+                    'ParkingSpace.type',
+                  ) as any,
+                lat:
+                  nullableNumber(item.lat),
+                lng:
+                  nullableNumber(item.lng),
+                widthMeter:
+                  nullableNumber(
+                    item.widthMeter,
+                  ),
+                heightMeter:
+                  nullableNumber(
+                    item.heightMeter,
+                  ),
+                rotationDeg:
+                  nullableNumber(
+                    item.rotationDeg,
+                  ),
+                posX:
+                  nullableNumber(item.posX),
+                posY:
+                  nullableNumber(item.posY),
+                isActive:
+                  booleanValue(
+                    item.isActive,
+                    true,
+                  ),
+              };
+
+            if (
+              item.polygonJson !== null &&
+              item.polygonJson !== undefined
+            ) {
+              spaceData.polygonJson =
+                item.polygonJson;
+            }
+
+            const saved = existing
+              ? await tx.parkingSpace.update({
+                  where: {
+                    id: existing.id,
+                  },
+                  data: spaceData,
+                })
+              : await tx.parkingSpace.create({
+                  data: {
+                    id: cloudSpaceId,
+                    ...spaceData,
+                    status: 'EMPTY' as any,
+                  } as any,
+                });
+
+            spaceIdMap.set(
+              cloudSpaceId,
+              saved.id,
+            );
+            spaceSectionIdMap.set(
+              cloudSpaceId,
+              localSectionId,
+            );
+            syncedSpaceIds.push(saved.id);
+          }
+
+          const allLotSections =
+            await tx.parkingSection.findMany({
+              where: {
+                parkingLotId:
+                  localParkingLotId,
+              },
+              select: {
+                id: true,
+              },
+            });
+
+          const allLotSectionIds =
+            allLotSections.map(
+              (section: any) =>
+                section.id,
+            );
+
+          if (allLotSectionIds.length > 0) {
+            await tx.parkingSpace.updateMany({
+              where: {
+                sectionId: {
+                  in: allLotSectionIds,
+                },
+                ...(syncedSpaceIds.length > 0
+                  ? {
+                      id: {
+                        notIn:
+                          syncedSpaceIds,
+                      },
+                    }
+                  : {}),
+              },
+              data: {
+                isActive: false,
+              },
+            });
+          }
+
+          /*
+           * 3. SensorDevice
+           *
+           * SensorDevice.status, lastSeenAt 및 현장 telemetry는
+           * 기존 Edge 값을 우선 보존한다.
+           */
+          for (const item of sensorDevices) {
+            const cloudSensorId =
+              requiredText(
+                item.id,
+                'SensorDevice.id',
+              );
+            const serialNumber =
+              requiredText(
+                item.serialNumber,
+                'SensorDevice.serialNumber',
+              );
+            const devEui =
+              nullableText(item.devEui);
+
+            const cloudSectionId =
+              nullableText(
+                item.parkingSectionId,
+              );
+            const cloudSpaceId =
+              nullableText(
+                item.parkingSpaceId,
+              );
+
+            const localSpaceId =
+              cloudSpaceId
+                ? spaceIdMap.get(
+                    cloudSpaceId,
+                  ) ?? null
+                : null;
+
+            const localSectionId =
+              cloudSectionId
+                ? sectionIdMap.get(
+                    cloudSectionId,
+                  ) ?? null
+                : cloudSpaceId
+                  ? spaceSectionIdMap.get(
+                      cloudSpaceId,
+                    ) ?? null
+                  : null;
+
+            const orConditions:
+              Array<Record<string, any>> = [
+                {
+                  id: cloudSensorId,
+                },
+                {
+                  serialNumber,
+                },
+              ];
+
+            if (devEui) {
+              orConditions.push({
+                devEui,
+              });
+            }
+
+            const existing =
+              await tx.sensorDevice.findFirst({
+                where: {
+                  OR: orConditions,
+                },
+              });
+
+            if (localSpaceId) {
+              await tx.sensorDevice.updateMany({
+                where: {
+                  parkingSpaceId:
+                    localSpaceId,
+                  ...(existing
+                    ? {
+                        id: {
+                          not:
+                            existing.id,
+                        },
+                      }
+                    : {}),
+                },
+                data: {
+                  parkingSpaceId: null,
+                },
+              });
+            }
+
+            const existingMetadata =
+              this.asRecord(
+                existing?.metadata,
+              );
+            const cloudMetadata =
+              this.asRecord(item.metadata);
+
+            const sensorData:
+              Record<string, any> = {
+                name:
+                  requiredText(
+                    item.name,
+                    'SensorDevice.name',
+                  ),
+                type:
+                  requiredText(
+                    item.type,
+                    'SensorDevice.type',
+                  ),
+                serialNumber,
+                devEui,
+                macAddress:
+                  nullableText(
+                    item.macAddress,
+                  ),
+                ipAddress:
+                  nullableText(
+                    item.ipAddress,
+                  ),
+                installLocation:
+                  nullableText(
+                    item.installLocation,
+                  ),
+                parkingLotId:
+                  localParkingLotId,
+                parkingSectionId:
+                  localSectionId,
+                parkingSpaceId:
+                  localSpaceId,
+                metadata: {
+                  ...existingMetadata,
+                  cloudConfiguration: {
+                    ...cloudMetadata,
+                    cloudSensorId,
+                    syncedAt: appliedAt,
+                  },
+                } as any,
+              };
+
+            if (existing) {
+              sensorData.firmwareVersion =
+                existing.firmwareVersion ??
+                nullableText(
+                  item.firmwareVersion,
+                );
+
+              const saved =
+                await tx.sensorDevice.update({
+                  where: {
+                    id: existing.id,
+                  },
+                  data: sensorData,
+                });
+
+              syncedSensorIds.push(saved.id);
+            } else {
+              const saved =
+                await tx.sensorDevice.create({
+                  data: {
+                    id: cloudSensorId,
+                    ...sensorData,
+                    firmwareVersion:
+                      nullableText(
+                        item.firmwareVersion,
+                      ),
+                    status:
+                      (
+                        nullableText(
+                          item.status,
+                        ) ?? 'ACTIVE'
+                      ) as any,
+                  } as any,
+                });
+
+              syncedSensorIds.push(saved.id);
+            }
+          }
+
+          /*
+           * sensorInventoryAuthoritative=false인 동안에는
+           * Snapshot에 없는 Edge 센서를 비활성화하거나 제거하지 않는다.
+           */
+
+          /*
+           * 4. FeePolicy + FeePolicyTimeRule
+           */
+          for (const item of feePolicies) {
+            const cloudPolicyId =
+              requiredText(
+                item.id,
+                'FeePolicy.id',
+              );
+            const code =
+              nullableText(item.code);
+
+            const orConditions:
+              Array<Record<string, any>> = [
+                {
+                  id: cloudPolicyId,
+                },
+              ];
+
+            if (code) {
+              orConditions.push({
+                parkingLotId:
+                  localParkingLotId,
+                code,
+              });
+            }
+
+            const existing =
+              await tx.feePolicy.findFirst({
+                where: {
+                  OR: orConditions,
+                },
+              });
+
+            const feePolicyData:
+              Record<string, any> = {
+                parkingLotId:
+                  localParkingLotId,
+                code,
+                name:
+                  nullableText(item.name),
+                vehicleType:
+                  requiredText(
+                    item.vehicleType,
+                    'FeePolicy.vehicleType',
+                  ),
+                baseMinutes:
+                  Math.trunc(
+                    requiredNumber(
+                      item.baseMinutes,
+                      'FeePolicy.baseMinutes',
+                    ),
+                  ),
+                baseFee:
+                  Math.trunc(
+                    requiredNumber(
+                      item.baseFee,
+                      'FeePolicy.baseFee',
+                    ),
+                  ),
+                unitMinutes:
+                  Math.trunc(
+                    requiredNumber(
+                      item.unitMinutes,
+                      'FeePolicy.unitMinutes',
+                    ),
+                  ),
+                unitFee:
+                  Math.trunc(
+                    requiredNumber(
+                      item.unitFee,
+                      'FeePolicy.unitFee',
+                    ),
+                  ),
+                memberDiscountPercent:
+                  Math.trunc(
+                    requiredNumber(
+                      item.memberDiscountPercent,
+                      'FeePolicy.memberDiscountPercent',
+                    ),
+                  ),
+                dailyMax:
+                  nullableNumber(
+                    item.dailyMax,
+                  ),
+                graceMinutes:
+                  Math.trunc(
+                    requiredNumber(
+                      item.graceMinutes,
+                      'FeePolicy.graceMinutes',
+                    ),
+                  ),
+                exitGraceMinutes:
+                  Math.trunc(
+                    requiredNumber(
+                      item.exitGraceMinutes,
+                      'FeePolicy.exitGraceMinutes',
+                    ),
+                  ),
+                registrationGraceMinutes:
+                  Math.trunc(
+                    requiredNumber(
+                      item.registrationGraceMinutes,
+                      'FeePolicy.registrationGraceMinutes',
+                    ),
+                  ),
+                registrationGraceFee:
+                  Math.trunc(
+                    requiredNumber(
+                      item.registrationGraceFee,
+                      'FeePolicy.registrationGraceFee',
+                    ),
+                  ),
+                registrationGraceDiscountEnabled:
+                  booleanValue(
+                    item.registrationGraceDiscountEnabled,
+                    true,
+                  ),
+                authorityRegistrationGraceDiscountEnabled:
+                  booleanValue(
+                    item.authorityRegistrationGraceDiscountEnabled,
+                    false,
+                  ),
+                watcherRewardGraceFeeEnabled:
+                  booleanValue(
+                    item.watcherRewardGraceFeeEnabled,
+                    false,
+                  ),
+                taxType:
+                  (
+                    nullableText(item.taxType) ??
+                    'VAT_INCLUDED'
+                  ) as any,
+                isActive:
+                  booleanValue(
+                    item.isActive,
+                    true,
+                  ),
+                validFrom:
+                  nullableDate(
+                    item.validFrom,
+                    'FeePolicy.validFrom',
+                  ),
+                validTo:
+                  nullableDate(
+                    item.validTo,
+                    'FeePolicy.validTo',
+                  ),
+              };
+
+            const saved = existing
+              ? await tx.feePolicy.update({
+                  where: {
+                    id: existing.id,
+                  },
+                  data: feePolicyData,
+                })
+              : await tx.feePolicy.create({
+                  data: {
+                    id: cloudPolicyId,
+                    ...feePolicyData,
+                  } as any,
+                });
+
+            syncedFeePolicyIds.push(
+              saved.id,
+            );
+
+            await tx.feePolicyTimeRule.deleteMany({
+              where: {
+                feePolicyId: saved.id,
+              },
+            });
+
+            const timeRules =
+              recordArray(item.timeRules);
+
+            if (timeRules.length > 0) {
+              await tx.feePolicyTimeRule.createMany({
+                data: timeRules.map(
+                  (
+                    rule,
+                    index,
+                  ) => ({
+                    id:
+                      nullableText(
+                        rule.id,
+                      ) ??
+                      `${saved.id}-rule-${index + 1}`,
+                    feePolicyId:
+                      saved.id,
+                    startHour:
+                      Math.trunc(
+                        requiredNumber(
+                          rule.startHour,
+                          'FeePolicyTimeRule.startHour',
+                        ),
+                      ),
+                    endHour:
+                      Math.trunc(
+                        requiredNumber(
+                          rule.endHour,
+                          'FeePolicyTimeRule.endHour',
+                        ),
+                      ),
+                    multiplier:
+                      requiredNumber(
+                        rule.multiplier,
+                        'FeePolicyTimeRule.multiplier',
+                      ),
+                  }),
+                ),
+              });
+            }
+          }
+
+          await tx.feePolicy.updateMany({
+            where: {
+              parkingLotId:
+                localParkingLotId,
+              ...(syncedFeePolicyIds.length > 0
+                ? {
+                    id: {
+                      notIn:
+                        syncedFeePolicyIds,
+                    },
+                  }
+                : {}),
+            },
+            data: {
+              isActive: false,
+            },
+          });
+
+          /*
+           * 5. DiscountEligibilityDefinition
+           */
+          for (
+            const item of
+            eligibilityDefinitions
+          ) {
+            const cloudDefinitionId =
+              requiredText(
+                item.id,
+                'DiscountEligibilityDefinition.id',
+              );
+            const code =
+              requiredText(
+                item.code,
+                'DiscountEligibilityDefinition.code',
+              );
+
+            const existing =
+              await tx.discountEligibilityDefinition.findFirst({
+                where: {
+                  OR: [
+                    {
+                      id: cloudDefinitionId,
+                    },
+                    {
+                      code,
+                    },
+                  ],
+                },
+              });
+
+            const definitionData:
+              Record<string, any> = {
+                code,
+                name:
+                  requiredText(
+                    item.name,
+                    'DiscountEligibilityDefinition.name',
+                  ),
+                scope:
+                  requiredText(
+                    item.scope,
+                    'DiscountEligibilityDefinition.scope',
+                  ) as any,
+                description:
+                  nullableText(
+                    item.description,
+                  ),
+                isActive:
+                  booleanValue(
+                    item.isActive,
+                    true,
+                  ),
+                displayOrder:
+                  Math.trunc(
+                    requiredNumber(
+                      item.displayOrder,
+                      'DiscountEligibilityDefinition.displayOrder',
+                    ),
+                  ),
+              };
+
+            const saved = existing
+              ? await tx.discountEligibilityDefinition.update({
+                  where: {
+                    id: existing.id,
+                  },
+                  data: definitionData,
+                })
+              : await tx.discountEligibilityDefinition.create({
+                  data: {
+                    id: cloudDefinitionId,
+                    ...definitionData,
+                  } as any,
+                });
+
+            eligibilityIdMap.set(
+              cloudDefinitionId,
+              saved.id,
+            );
+          }
+
+          /*
+           * 6. ParkingDiscountProgram
+           */
+          for (const item of discountPrograms) {
+            const cloudProgramId =
+              requiredText(
+                item.id,
+                'ParkingDiscountProgram.id',
+              );
+            const code =
+              requiredText(
+                item.code,
+                'ParkingDiscountProgram.code',
+              );
+            const cloudEligibilityId =
+              requiredText(
+                item.eligibilityDefinitionId,
+                'ParkingDiscountProgram.eligibilityDefinitionId',
+              );
+            const localEligibilityId =
+              eligibilityIdMap.get(
+                cloudEligibilityId,
+              );
+
+            if (!localEligibilityId) {
+              throw new BadRequestException(
+                `Discount eligibility mapping not found: ${cloudEligibilityId}`,
+              );
+            }
+
+            const existing =
+              await tx.parkingDiscountProgram.findFirst({
+                where: {
+                  OR: [
+                    {
+                      id: cloudProgramId,
+                    },
+                    {
+                      parkingLotId:
+                        localParkingLotId,
+                      code,
+                    },
+                  ],
+                },
+              });
+
+            const programData:
+              Record<string, any> = {
+                parkingLotId:
+                  localParkingLotId,
+                eligibilityDefinitionId:
+                  localEligibilityId,
+                code,
+                name:
+                  requiredText(
+                    item.name,
+                    'ParkingDiscountProgram.name',
+                  ),
+                description:
+                  nullableText(
+                    item.description,
+                  ),
+                benefitType:
+                  requiredText(
+                    item.benefitType,
+                    'ParkingDiscountProgram.benefitType',
+                  ) as any,
+                benefitValue:
+                  Math.trunc(
+                    requiredNumber(
+                      item.benefitValue,
+                      'ParkingDiscountProgram.benefitValue',
+                    ),
+                  ),
+                priority:
+                  Math.trunc(
+                    requiredNumber(
+                      item.priority,
+                      'ParkingDiscountProgram.priority',
+                    ),
+                  ),
+                stackable:
+                  booleanValue(
+                    item.stackable,
+                    true,
+                  ),
+                stackableWithCoupon:
+                  booleanValue(
+                    item.stackableWithCoupon,
+                    true,
+                  ),
+                maxDiscountAmount:
+                  nullableNumber(
+                    item.maxDiscountAmount,
+                  ),
+                minimumPayableAmount:
+                  Math.trunc(
+                    requiredNumber(
+                      item.minimumPayableAmount,
+                      'ParkingDiscountProgram.minimumPayableAmount',
+                    ),
+                  ),
+                isActive:
+                  booleanValue(
+                    item.isActive,
+                    true,
+                  ),
+                validFrom:
+                  nullableDate(
+                    item.validFrom,
+                    'ParkingDiscountProgram.validFrom',
+                  ),
+                validUntil:
+                  nullableDate(
+                    item.validUntil,
+                    'ParkingDiscountProgram.validUntil',
+                  ),
+              };
+
+            const saved = existing
+              ? await tx.parkingDiscountProgram.update({
+                  where: {
+                    id: existing.id,
+                  },
+                  data: programData,
+                })
+              : await tx.parkingDiscountProgram.create({
+                  data: {
+                    id: cloudProgramId,
+                    ...programData,
+                  } as any,
+                });
+
+            syncedDiscountProgramIds.push(
+              saved.id,
+            );
+          }
+
+          await tx.parkingDiscountProgram.updateMany({
+            where: {
+              parkingLotId:
+                localParkingLotId,
+              ...(syncedDiscountProgramIds.length > 0
+                ? {
+                    id: {
+                      notIn:
+                        syncedDiscountProgramIds,
+                    },
+                  }
+                : {}),
+            },
+            data: {
+              isActive: false,
+            },
+          });
+
+          return {
+            sectionCount:
+              syncedSectionIds.length,
+            spaceCount:
+              syncedSpaceIds.length,
+            sensorCount:
+              syncedSensorIds.length,
+            feePolicyCount:
+              syncedFeePolicyIds.length,
+            eligibilityDefinitionCount:
+              eligibilityDefinitions.length,
+            discountProgramCount:
+              syncedDiscountProgramIds.length,
+          };
+        },
+      );
+
+    return {
+      ...configurationResult,
+      action:
+        'CLOUD_PARKING_LOT_OPERATION_SNAPSHOT_APPLIED',
+      snapshotVersion:
+        this.numberValue(
+          payload.snapshotVersion,
+        ) ?? 1,
+      snapshotAppliedAt: appliedAt,
+      sensorInventoryAuthoritative:
+        payload.sensorInventoryAuthoritative ===
+        true,
+      ...result,
+    };
+  }
+
+  private async applyParkingLotConfigurationFromCloud(
+    edgeNodeId: string,
+    message: ResolvedCloudMessage,
+  ) {
+    const payload = message.payload;
+    const parkingLotId =
+      this.stringValue(payload.parkingLotId) ??
+      this.stringValue(payload.id);
+    const code = this.stringValue(payload.code);
+
+    if (!parkingLotId && !code) {
+      throw new BadRequestException(
+        'Parking lot sync requires parkingLotId or code',
+      );
+    }
+
+    const orConditions: Array<Record<string, string>> = [];
+
+    if (parkingLotId) {
+      orConditions.push({
+        id: parkingLotId,
+      });
+    }
+
+    if (code) {
+      orConditions.push({
+        code,
+      });
+    }
+
+    const localLot = await this.prisma.parkingLot.findFirst({
+      where: {
+        OR: orConditions,
+      },
+    });
+
+    if (!localLot) {
+      return {
+        ok: false,
+        applied: false,
+        action: 'LOCAL_PARKING_LOT_NOT_FOUND',
+        edgeNodeId,
+        cursor: message.cursor,
+        outboxId: message.outboxId,
+        eventType: message.eventType,
+        parkingLotId,
+        code,
+      };
+    }
+
+    const has = (key: string) =>
+      Object.prototype.hasOwnProperty.call(payload, key);
+
+    const nullableText = (
+      key: string,
+      fallback: string | null,
+    ) => {
+      if (!has(key)) {
+        return fallback;
+      }
+
+      const value = payload[key];
+
+      if (value === null || value === undefined) {
+        return null;
+      }
+
+      const normalized = String(value).trim();
+      return normalized || null;
+    };
+
+    const requiredText = (
+      key: string,
+      fallback: string,
+    ) => {
+      if (!has(key)) {
+        return fallback;
+      }
+
+      const value = this.stringValue(payload[key]);
+      return value ?? fallback;
+    };
+
+    const numericValue = (
+      key: string,
+      fallback: number | null,
+    ): number | null => {
+      if (!has(key)) {
+        return fallback;
+      }
+
+      return this.numberValue(payload[key]) ?? fallback;
+    };
+
+    const operationMode =
+      payload.operationMode === 'MANUAL'
+        ? 'MANUAL'
+        : payload.operationMode === 'SENSOR'
+          ? 'SENSOR'
+          : localLot.operationMode;
+
+    const isActive =
+      typeof payload.isActive === 'boolean'
+        ? payload.isActive
+        : localLot.isActive;
+
+    const managementCompanyId = has('managementCompanyId')
+      ? this.stringValue(payload.managementCompanyId)
+      : localLot.managementCompanyId;
+
+    const managementCompanyPayload =
+      this.asRecordOrNull(payload.managementCompany);
+
+    const updatedLot = await this.prisma.$transaction(
+      async (tx) => {
+        let resolvedManagementCompanyId =
+          managementCompanyId;
+
+        if (managementCompanyPayload) {
+          const syncedManagementCompanyId =
+            this.stringValue(
+              managementCompanyPayload.id,
+            ) ?? managementCompanyId;
+
+          const syncedManagementCompanyName =
+            this.stringValue(
+              managementCompanyPayload.name,
+            );
+
+          const syncedManagementCompanyCode =
+            this.stringValue(
+              managementCompanyPayload.code,
+            );
+
+          if (
+            !syncedManagementCompanyId ||
+            !syncedManagementCompanyName ||
+            !syncedManagementCompanyCode
+          ) {
+            throw new BadRequestException(
+              'Management company sync requires id, name and code',
+            );
+          }
+
+          const nestedNullableText = (
+            key: string,
+          ): string | null => {
+            const value =
+              managementCompanyPayload[key];
+
+            if (
+              value === null ||
+              value === undefined
+            ) {
+              return null;
+            }
+
+            const normalized =
+              String(value).trim();
+
+            return normalized || null;
+          };
+
+          const syncedManagementCompany =
+            await tx.managementCompany.upsert({
+              where: {
+                id: syncedManagementCompanyId,
+              },
+              create: {
+                id: syncedManagementCompanyId,
+                name: syncedManagementCompanyName,
+                code: syncedManagementCompanyCode,
+                businessNumber:
+                  nestedNullableText(
+                    'businessNumber',
+                  ),
+                representative:
+                  nestedNullableText(
+                    'representative',
+                  ),
+                contact:
+                  nestedNullableText('contact'),
+                address:
+                  nestedNullableText('address'),
+                memo:
+                  nestedNullableText('memo'),
+                isActive:
+                  typeof managementCompanyPayload.isActive ===
+                  'boolean'
+                    ? managementCompanyPayload.isActive
+                    : true,
+              },
+              update: {
+                name: syncedManagementCompanyName,
+                code: syncedManagementCompanyCode,
+                businessNumber:
+                  nestedNullableText(
+                    'businessNumber',
+                  ),
+                representative:
+                  nestedNullableText(
+                    'representative',
+                  ),
+                contact:
+                  nestedNullableText('contact'),
+                address:
+                  nestedNullableText('address'),
+                memo:
+                  nestedNullableText('memo'),
+                isActive:
+                  typeof managementCompanyPayload.isActive ===
+                  'boolean'
+                    ? managementCompanyPayload.isActive
+                    : true,
+              },
+            });
+
+          resolvedManagementCompanyId =
+            syncedManagementCompany.id;
+        } else if (managementCompanyId) {
+          const existingManagementCompany =
+            await tx.managementCompany.findUnique({
+              where: {
+                id: managementCompanyId,
+              },
+              select: {
+                id: true,
+              },
+            });
+
+          if (!existingManagementCompany) {
+            throw new BadRequestException(
+              `Management company not found on Edge: ${managementCompanyId}`,
+            );
+          }
+        }
+
+        return tx.parkingLot.update({
+          where: {
+            id: localLot.id,
+          },
+          data: {
+            code: requiredText(
+              'code',
+              localLot.code,
+            ),
+            name: requiredText(
+              'name',
+              localLot.name,
+            ),
+            region: nullableText(
+              'region',
+              localLot.region,
+            ),
+            district: nullableText(
+              'district',
+              localLot.district,
+            ),
+            address: nullableText(
+              'address',
+              localLot.address,
+            ),
+            lat: numericValue(
+              'lat',
+              localLot.lat,
+            ),
+            lng: numericValue(
+              'lng',
+              localLot.lng,
+            ),
+            centerLat: numericValue(
+              'centerLat',
+              localLot.centerLat,
+            ),
+            centerLng: numericValue(
+              'centerLng',
+              localLot.centerLng,
+            ),
+            representative: nullableText(
+              'representative',
+              localLot.representative,
+            ),
+            contact: nullableText(
+              'contact',
+              localLot.contact,
+            ),
+            operationMode: operationMode as any,
+            isActive,
+            managementCompanyId:
+              resolvedManagementCompanyId,
+          },
+        });
+      },
+    );
+
+    return {
+      ok: true,
+      applied: true,
+      action:
+        'CLOUD_PARKING_LOT_CONFIGURATION_APPLIED',
+      edgeNodeId,
+      cursor: message.cursor,
+      outboxId: message.outboxId,
+      eventType: message.eventType,
+      parkingLotId: updatedLot.id,
+      code: updatedLot.code,
+      operationMode: updatedLot.operationMode,
+      isActive: updatedLot.isActive,
+      managementCompanyId:
+        updatedLot.managementCompanyId,
     };
   }
 
@@ -693,53 +2163,1060 @@ export class SyncService {
       };
     }
 
-    if (
-      input.event.eventType !==
-      'PARKING_SESSION_EXITED_UNPAID_EDGE_SYNC_REQUIRED'
-    ) {
-      return {
-        processed: false,
-        action: 'IGNORED_EVENT_TYPE',
-        invoice: null,
-        error: null,
-      };
-    }
-
     try {
-      const result = await this.createCloudInvoiceForEdgeUnpaidExit({
-        edgeNodeId: input.edgeNodeId,
-        event: input.event,
-        payload: input.payload,
-      });
+      let result:
+        Record<string, any>;
+
+      switch (input.event.eventType) {
+        case 'PARKING_SESSION_EXITED_UNPAID_EDGE_SYNC_REQUIRED':
+          result =
+            await this
+              .createCloudInvoiceForEdgeUnpaidExit({
+                edgeNodeId:
+                  input.edgeNodeId,
+                event: input.event,
+                payload:
+                  input.payload,
+              });
+          break;
+
+        case 'PARKING_SESSION_ENTERED_FROM_EDGE':
+        case 'PARKING_SESSION_EXITED_FROM_EDGE':
+          result =
+            await this
+              .applyEdgeParkingSessionEvent({
+                edgeNodeId:
+                  input.edgeNodeId,
+                event: input.event,
+                payload:
+                  input.payload,
+              });
+          break;
+
+        case 'SENSOR_TELEMETRY_REPORTED_FROM_EDGE':
+        case 'PARKING_SPACE_STATUS_CHANGED_FROM_EDGE':
+          result =
+            await this
+              .applyEdgeSensorEvent({
+                edgeNodeId:
+                  input.edgeNodeId,
+                event: input.event,
+                payload:
+                  input.payload,
+              });
+          break;
+
+        default:
+          return {
+            processed: false,
+            action:
+              'IGNORED_EVENT_TYPE',
+            invoice: null,
+            error: null,
+          };
+      }
 
       await this.markInboxProcessed({
-        messageId: input.messageId,
-        payload: input.payload,
-        result,
+        messageId:
+          input.messageId,
+        payload:
+          input.payload,
+        result: result as any,
       });
 
       return {
         processed: true,
-        action: result.action,
-        invoice: result.invoice,
+        action:
+          String(
+            result.action ??
+            'PROCESSED',
+          ),
+        invoice:
+          result.invoice ?? null,
         error: null,
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message =
+        error instanceof Error
+          ? error.message
+          : String(error);
 
       await this.markInboxFailed({
-        messageId: input.messageId,
-        payload: input.payload,
+        messageId:
+          input.messageId,
+        payload:
+          input.payload,
         error: message,
       });
 
       return {
         processed: false,
-        action: 'PROCESSING_FAILED',
+        action:
+          'PROCESSING_FAILED',
         invoice: null,
         error: message,
       };
     }
+  }
+
+  private async applyEdgeParkingSessionEvent(input: {
+    edgeNodeId: string;
+    event: EdgePushEvent;
+    payload: Record<string, unknown>;
+  }) {
+    const payload = input.payload;
+
+    const isEntry =
+      input.event.eventType ===
+      'PARKING_SESSION_ENTERED_FROM_EDGE';
+
+    const sessionId =
+      this.stringValue(
+        payload.sessionId,
+      );
+
+    const sessionNo =
+      this.stringValue(
+        payload.sessionNo,
+      );
+
+    const parkingLotId =
+      this.stringValue(
+        payload.parkingLotId,
+      );
+
+    const parkingSpaceId =
+      this.stringValue(
+        payload.parkingSpaceId,
+      );
+
+    if (!sessionId || !sessionNo) {
+      throw new BadRequestException(
+        'Edge parking-session event requires sessionId and sessionNo',
+      );
+    }
+
+    if (!parkingLotId) {
+      throw new BadRequestException(
+        'Edge parking-session event requires parkingLotId',
+      );
+    }
+
+    if (!parkingSpaceId) {
+      throw new BadRequestException(
+        'Edge parking-session event requires parkingSpaceId',
+      );
+    }
+
+    const edgeParkingLot =
+      await this.prisma
+        .edgeParkingLot.findFirst({
+          where: {
+            edgeNodeId:
+              input.edgeNodeId,
+            parkingLotId,
+          },
+          select: {
+            id: true,
+          },
+        });
+
+    if (!edgeParkingLot) {
+      throw new BadRequestException(
+        `Edge node ${input.edgeNodeId} is not assigned to parking lot ${parkingLotId}`,
+      );
+    }
+
+    const parkingSpace =
+      await this.prisma
+        .parkingSpace.findUnique({
+          where: {
+            id: parkingSpaceId,
+          },
+          include: {
+            section: true,
+          },
+        });
+
+    if (!parkingSpace) {
+      throw new BadRequestException(
+        `Cloud parking space not found: ${parkingSpaceId}`,
+      );
+    }
+
+    if (
+      parkingSpace.section
+        .parkingLotId !==
+      parkingLotId
+    ) {
+      throw new BadRequestException(
+        `Parking space ${parkingSpaceId} does not belong to parking lot ${parkingLotId}`,
+      );
+    }
+
+    let existing =
+      await this.prisma
+        .parkingSession.findUnique({
+          where: {
+            id: sessionId,
+          },
+          include: {
+            ParkingSpace: {
+              include: {
+                section: true,
+              },
+            },
+          },
+        });
+
+    if (!existing) {
+      existing =
+        await this.prisma
+          .parkingSession.findFirst({
+            where: {
+              sessionNo,
+            },
+            include: {
+              ParkingSpace: {
+                include: {
+                  section: true,
+                },
+              },
+            },
+          });
+    }
+
+    if (
+      existing?.ParkingSpace &&
+      existing.ParkingSpace.section
+        .parkingLotId !==
+        parkingLotId
+    ) {
+      throw new BadRequestException(
+        `Cloud session ${existing.id} belongs to a different parking lot`,
+      );
+    }
+
+    const occurredAt =
+      this.resolveOccurredAt(
+        this.stringValue(
+          payload.occurredAt,
+        ) ??
+        input.event.occurredAt,
+      );
+
+    const existingMetadata =
+      this.asRecord(
+        existing?.metadata,
+      );
+
+    const lastEventAtText =
+      this.stringValue(
+        existingMetadata
+          .edgeLastSessionEventAt,
+      );
+
+    if (lastEventAtText) {
+      const lastEventAt =
+        new Date(lastEventAtText);
+
+      if (
+        !Number.isNaN(
+          lastEventAt.getTime(),
+        ) &&
+        lastEventAt.getTime() >
+          occurredAt.getTime()
+      ) {
+        return {
+          action:
+            'EDGE_SESSION_STALE_EVENT_IGNORED',
+          sessionId:
+            existing?.id ??
+            sessionId,
+          sessionNo,
+          eventType:
+            input.event.eventType,
+          invoice: null,
+        };
+      }
+    }
+
+    const parseOptionalDate = (
+      value: unknown,
+    ): Date | null => {
+      const text =
+        this.stringValue(value);
+
+      if (!text) {
+        return null;
+      }
+
+      const parsed =
+        new Date(text);
+
+      if (
+        Number.isNaN(
+          parsed.getTime(),
+        )
+      ) {
+        throw new BadRequestException(
+          `Invalid session date: ${text}`,
+        );
+      }
+
+      return parsed;
+    };
+
+    const integerValue = (
+      value: unknown,
+    ): number | null => {
+      const normalized =
+        this.numberValue(value);
+
+      if (
+        normalized === null ||
+        !Number.isFinite(normalized)
+      ) {
+        return null;
+      }
+
+      return Math.round(normalized);
+    };
+
+    const totalMinutes =
+      integerValue(
+        payload.totalMinutes,
+      );
+
+    const entryTimeFromPayload =
+      parseOptionalDate(
+        payload.entryTime,
+      );
+
+    const exitTimeFromPayload =
+      parseOptionalDate(
+        payload.exitTime,
+      );
+
+    const exitTime =
+      isEntry
+        ? null
+        : exitTimeFromPayload ??
+          occurredAt;
+
+    const entryTime =
+      entryTimeFromPayload ??
+      existing?.entryTime ??
+      (
+        !isEntry &&
+        exitTime &&
+        totalMinutes !== null
+          ? new Date(
+              exitTime.getTime() -
+              totalMinutes * 60000,
+            )
+          : occurredAt
+      );
+
+    const incomingMetadata =
+      this.asRecord(
+        payload.metadata,
+      );
+
+    const sessionStatus =
+      this.stringValue(
+        payload.sessionStatus,
+      );
+
+    const nextStatus =
+      isEntry
+        ? 'ACTIVE'
+        : sessionStatus === 'PAID'
+          ? 'PAID'
+          : 'CLOSED';
+
+    const amount =
+      integerValue(payload.amount);
+
+    const paidAmount =
+      integerValue(
+        payload.paidAmount,
+      );
+
+    const unpaidAmount =
+      integerValue(
+        payload.unpaidAmount,
+      );
+
+    const isRegistered =
+      typeof payload.isRegistered ===
+      'boolean'
+        ? payload.isRegistered
+        : existing?.isRegistered ??
+          false;
+
+    const metadata = {
+      ...existingMetadata,
+      ...incomingMetadata,
+      source:
+        'EDGE_SYNC',
+      edgeNodeId:
+        input.edgeNodeId,
+      edgeSessionId:
+        sessionId,
+      edgeSessionNo:
+        sessionNo,
+      syncedFromEdge:
+        true,
+      syncedFromEdgeAt:
+        new Date().toISOString(),
+      edgeLastSessionEventType:
+        input.event.eventType,
+      edgeLastSessionEventAt:
+        occurredAt.toISOString(),
+      edgeUserId:
+        this.stringValue(
+          payload.edgeUserId,
+        ),
+      edgeVehicleId:
+        this.stringValue(
+          payload.edgeVehicleId,
+        ),
+      sensorDeviceId:
+        this.stringValue(
+          payload.sensorDeviceId,
+        ),
+      devEui:
+        this.stringValue(
+          payload.devEui,
+        ),
+      paymentRequired:
+        typeof payload
+          .paymentRequired ===
+        'boolean'
+          ? payload.paymentRequired
+          : unpaidAmount !== null
+            ? unpaidAmount > 0
+            : false,
+      invoiceId:
+        this.stringValue(
+          payload.invoiceId,
+        ),
+      invoiceNo:
+        this.stringValue(
+          payload.invoiceNo,
+        ),
+      invoiceStatus:
+        this.stringValue(
+          payload.invoiceStatus,
+        ),
+      feeCalculation:
+        payload.feeCalculation ??
+        null,
+    };
+
+    const eventData = {
+      type:
+        isEntry
+          ? 'EDGE_SESSION_ENTRY_SYNCED'
+          : 'EDGE_SESSION_EXIT_SYNCED',
+      source:
+        'EDGE_SYNC',
+      payload: {
+        edgeNodeId:
+          input.edgeNodeId,
+        edgeEventId:
+          input.event.eventId ??
+          null,
+        edgeEventType:
+          input.event.eventType,
+        occurredAt:
+          occurredAt.toISOString(),
+        parkingLotId,
+        parkingSpaceId,
+      } as any,
+    };
+
+    const result =
+      await this.prisma
+        .$transaction(async (tx) => {
+          let saved;
+
+          if (existing) {
+            saved =
+              await tx.parkingSession
+                .update({
+                  where: {
+                    id: existing.id,
+                  },
+                  data: {
+                    parkingSpaceId,
+                    plateNumber:
+                      this.stringValue(
+                        payload.plateNumber,
+                      ) ??
+                      existing.plateNumber,
+                    status:
+                      nextStatus as any,
+                    entrySource:
+                      this.stringValue(
+                        payload.entrySource,
+                      ) ??
+                      existing.entrySource ??
+                      'SENSOR',
+                    exitSource:
+                      isEntry
+                        ? existing.exitSource
+                        : this.stringValue(
+                            payload.exitSource,
+                          ) ??
+                          'SENSOR',
+                    entryTime,
+                    exitTime:
+                      isEntry
+                        ? existing.exitTime
+                        : exitTime,
+                    billingClosedAt:
+                      isEntry
+                        ? existing
+                            .billingClosedAt
+                        : parseOptionalDate(
+                            payload
+                              .billingClosedAt,
+                          ) ??
+                          exitTime,
+                    totalMinutes:
+                      totalMinutes ??
+                      existing.totalMinutes,
+                    amount:
+                      amount ??
+                      existing.amount,
+                    paidAmount:
+                      paidAmount ??
+                      existing.paidAmount,
+                    unpaidAmount:
+                      unpaidAmount ??
+                      existing.unpaidAmount,
+                    isRegistered,
+                    metadata:
+                      metadata as any,
+                    events: {
+                      create:
+                        eventData,
+                    },
+                  },
+                });
+          } else {
+            saved =
+              await tx.parkingSession
+                .create({
+                  data: {
+                    id: sessionId,
+                    sessionNo,
+                    parkingSpaceId,
+                    plateNumber:
+                      this.stringValue(
+                        payload.plateNumber,
+                      ),
+                    sessionType:
+                      'HOURLY' as any,
+                    status:
+                      nextStatus as any,
+                    entrySource:
+                      this.stringValue(
+                        payload.entrySource,
+                      ) ??
+                      'SENSOR',
+                    exitSource:
+                      isEntry
+                        ? null
+                        : this.stringValue(
+                            payload.exitSource,
+                          ) ??
+                          'SENSOR',
+                    entryTime,
+                    exitTime,
+                    billingClosedAt:
+                      isEntry
+                        ? null
+                        : parseOptionalDate(
+                            payload
+                              .billingClosedAt,
+                          ) ??
+                          exitTime,
+                    totalMinutes,
+                    amount,
+                    paidAmount,
+                    unpaidAmount,
+                    isRegistered,
+                    metadata:
+                      metadata as any,
+                    events: {
+                      create:
+                        eventData,
+                    },
+                  } as any,
+                });
+          }
+
+          await tx.parkingSpace.update({
+            where: {
+              id: parkingSpaceId,
+            },
+            data: {
+              status:
+                (
+                  isEntry
+                    ? 'OCCUPIED'
+                    : 'EMPTY'
+                ) as any,
+            },
+          });
+
+          return saved;
+        });
+
+    return {
+      action:
+        isEntry
+          ? 'EDGE_PARKING_SESSION_ENTERED_APPLIED'
+          : 'EDGE_PARKING_SESSION_EXITED_APPLIED',
+      sessionId:
+        result.id,
+      sessionNo:
+        result.sessionNo,
+      status:
+        result.status,
+      parkingLotId,
+      parkingSpaceId,
+      invoice: null,
+    };
+  }
+
+  private async applyEdgeSensorEvent(input: {
+    edgeNodeId: string;
+    event: EdgePushEvent;
+    payload: Record<string, unknown>;
+  }) {
+    const payload = input.payload;
+
+    const devEuiRaw =
+      this.stringValue(
+        payload.devEui,
+      );
+
+    const devEui =
+      devEuiRaw
+        ?.replace(/[\s:-]/g, '')
+        .toUpperCase() ??
+      null;
+
+    if (!devEui) {
+      throw new BadRequestException(
+        'Edge sensor event requires devEui',
+      );
+    }
+
+    const parkingLotId =
+      this.stringValue(
+        payload.parkingLotId,
+      );
+
+    if (!parkingLotId) {
+      throw new BadRequestException(
+        'Edge sensor event requires parkingLotId',
+      );
+    }
+
+    const edgeParkingLot =
+      await this.prisma
+        .edgeParkingLot.findFirst({
+          where: {
+            edgeNodeId:
+              input.edgeNodeId,
+            parkingLotId,
+          },
+          select: {
+            id: true,
+          },
+        });
+
+    if (!edgeParkingLot) {
+      throw new BadRequestException(
+        `Edge node ${input.edgeNodeId} is not assigned to parking lot ${parkingLotId}`,
+      );
+    }
+
+    const parkingSpaceId =
+      this.stringValue(
+        payload.parkingSpaceId,
+      );
+
+    const parkingSpace =
+      parkingSpaceId
+        ? await this.prisma
+            .parkingSpace.findUnique({
+              where: {
+                id: parkingSpaceId,
+              },
+              include: {
+                section: true,
+              },
+            })
+        : null;
+
+    if (
+      parkingSpace &&
+      parkingSpace.section
+        .parkingLotId !==
+        parkingLotId
+    ) {
+      throw new BadRequestException(
+        `Parking space ${parkingSpace.id} does not belong to parking lot ${parkingLotId}`,
+      );
+    }
+
+    if (
+      input.event.eventType ===
+        'PARKING_SPACE_STATUS_CHANGED_FROM_EDGE' &&
+      !parkingSpace
+    ) {
+      throw new BadRequestException(
+        `Cloud parking space not found: ${parkingSpaceId ?? 'null'}`,
+      );
+    }
+
+    const sensorDeviceId =
+      this.stringValue(
+        payload.sensorDeviceId,
+      );
+
+    const includeSensorScope = {
+      parkingSpace: {
+        include: {
+          section: true,
+        },
+      },
+    };
+
+    let sensor: any = null;
+
+    if (sensorDeviceId) {
+      sensor =
+        await this.prisma
+          .sensorDevice.findUnique({
+            where: {
+              id: sensorDeviceId,
+            },
+            include:
+              includeSensorScope,
+          });
+    }
+
+    const resolveSensorLotId = (
+      value: any,
+    ) =>
+      value?.parkingLotId ??
+      value?.parkingSpace
+        ?.section?.parkingLotId ??
+      null;
+
+    if (
+      sensor &&
+      resolveSensorLotId(sensor) !==
+        parkingLotId
+    ) {
+      sensor = null;
+    }
+
+    if (!sensor) {
+      const byDevEui =
+        await this.prisma
+          .sensorDevice.findUnique({
+            where: {
+              devEui,
+            },
+            include:
+              includeSensorScope,
+          });
+
+      if (
+        byDevEui &&
+        resolveSensorLotId(
+          byDevEui,
+        ) === parkingLotId
+      ) {
+        sensor = byDevEui;
+      }
+    }
+
+    const occurredAt =
+      this.resolveOccurredAt(
+        this.stringValue(
+          payload.occurredAt,
+        ) ??
+        input.event.occurredAt,
+      );
+
+    const integerValue = (
+      value: unknown,
+    ): number | null => {
+      const normalized =
+        this.numberValue(value);
+
+      return normalized !== null &&
+        Number.isInteger(normalized)
+        ? normalized
+        : null;
+    };
+
+    const parkingStatus =
+      integerValue(
+        payload.parkingStatus,
+      );
+
+    const deviceStatus =
+      integerValue(
+        payload.deviceStatus,
+      );
+
+    const batteryStatus =
+      integerValue(
+        payload.batteryStatus,
+      );
+
+    const firmwareVersion =
+      integerValue(
+        payload.firmwareVersion,
+      );
+
+    const batteryVoltage =
+      this.numberValue(
+        payload.batteryVoltage,
+      );
+
+    const rssi =
+      integerValue(payload.rssi);
+
+    const snr =
+      this.numberValue(payload.snr);
+
+    const channel =
+      integerValue(
+        payload.channel,
+      );
+
+    const fCnt =
+      integerValue(payload.fCnt);
+
+    const fPort =
+      integerValue(payload.fPort);
+
+    const dr =
+      integerValue(payload.dr);
+
+    const sourceEventType =
+      this.stringValue(
+        payload.sourceEventType,
+      ) ??
+      'parking.sensor.telemetry';
+
+    const sensorEventLogId =
+      this.stringValue(
+        payload.sensorEventLogId,
+      ) ??
+      input.event.eventId ??
+      randomUUID();
+
+    const requestedStatus =
+      this.stringValue(
+        payload.status,
+      );
+
+    const spaceStatus =
+      requestedStatus === 'EMPTY' ||
+      requestedStatus === 'OCCUPIED'
+        ? requestedStatus
+        : null;
+
+    if (
+      input.event.eventType ===
+        'PARKING_SPACE_STATUS_CHANGED_FROM_EDGE' &&
+      !spaceStatus
+    ) {
+      throw new BadRequestException(
+        'Edge parking-space status event requires EMPTY or OCCUPIED status',
+      );
+    }
+
+    const result =
+      await this.prisma
+        .$transaction(async (tx) => {
+          const logData = {
+            devEui,
+            deviceId:
+              sensor?.id ?? null,
+            parkingSpaceId:
+              parkingSpace?.id ??
+              null,
+            source:
+              `edge:${input.edgeNodeId}`,
+            eventType:
+              sourceEventType,
+            parkingStatus,
+            deviceStatus,
+            batteryStatus,
+            batteryVoltage,
+            firmwareVersion,
+            gatewayId:
+              this.stringValue(
+                payload.gatewayId,
+              ),
+            rssi,
+            snr,
+            channel,
+            fCnt,
+            fPort,
+            dr,
+            rawPayload:
+              payload.rawPayload ===
+              undefined
+                ? undefined
+                : payload
+                    .rawPayload as any,
+            parsedPayload:
+              payload.parsedPayload ===
+              undefined
+                ? undefined
+                : payload
+                    .parsedPayload as any,
+            occurredAt,
+          };
+
+          const sensorEventLog =
+            await tx.sensorEventLog
+              .upsert({
+                where: {
+                  id:
+                    sensorEventLogId,
+                },
+                update:
+                  logData as any,
+                create: {
+                  id:
+                    sensorEventLogId,
+                  ...logData,
+                } as any,
+              });
+
+          if (sensor) {
+            const metadata =
+              this.asRecord(
+                sensor.metadata,
+              );
+
+            const edgeTelemetry =
+              this.asRecord(
+                metadata.edgeTelemetry,
+              );
+
+            await tx.sensorDevice
+              .update({
+                where: {
+                  id: sensor.id,
+                },
+                data: {
+                  lastSeenAt:
+                    occurredAt,
+                  firmwareVersion:
+                    firmwareVersion !==
+                    null
+                      ? String(
+                          firmwareVersion,
+                        )
+                      : undefined,
+                  metadata: {
+                    ...metadata,
+                    edgeTelemetry: {
+                      ...edgeTelemetry,
+                      edgeNodeId:
+                        input.edgeNodeId,
+                      edgeEventId:
+                        input.event
+                          .eventId ??
+                        null,
+                      parkingStatus,
+                      deviceStatus,
+                      batteryStatus,
+                      batteryVoltage,
+                      gatewayId:
+                        this.stringValue(
+                          payload.gatewayId,
+                        ),
+                      rssi,
+                      snr,
+                      channel,
+                      fCnt,
+                      fPort,
+                      dr,
+                      occurredAt:
+                        occurredAt
+                          .toISOString(),
+                    },
+                  } as any,
+                },
+              });
+          }
+
+          if (
+            parkingSpace &&
+            spaceStatus
+          ) {
+            await tx.parkingSpace
+              .update({
+                where: {
+                  id:
+                    parkingSpace.id,
+                },
+                data: {
+                  status:
+                    spaceStatus as any,
+                },
+              });
+          }
+
+          return {
+            sensorEventLogId:
+              sensorEventLog.id,
+            sensorId:
+              sensor?.id ?? null,
+            parkingSpaceId:
+              parkingSpace?.id ??
+              null,
+          };
+        });
+
+    return {
+      action:
+        input.event.eventType ===
+        'PARKING_SPACE_STATUS_CHANGED_FROM_EDGE'
+          ? 'EDGE_PARKING_SPACE_STATUS_APPLIED'
+          : 'EDGE_SENSOR_TELEMETRY_APPLIED',
+      edgeNodeId:
+        input.edgeNodeId,
+      parkingLotId,
+      parkingSectionId:
+        this.stringValue(
+          payload.parkingSectionId,
+        ),
+      devEui,
+      sensorMatched:
+        Boolean(sensor),
+      status:
+        spaceStatus,
+      ...result,
+      invoice: null,
+    };
   }
 
   private async createCloudInvoiceForEdgeUnpaidExit(input: {
@@ -1340,7 +3817,7 @@ export class SyncService {
   }
 
   private isCloudMode() {
-    return (process.env.APP_MODE ?? 'cloud').toLowerCase() === 'cloud';
+    return (process.env.APP_PROFILE ?? process.env.APP_MODE ?? 'cloud').toLowerCase() === 'cloud';
   }
 
   private createCloudSyncedSessionNo(date: Date) {

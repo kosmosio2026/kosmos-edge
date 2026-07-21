@@ -47,7 +47,11 @@ type WorkerRunResult = {
 };
 
 const EDGE_TO_CLOUD_EVENT_TYPES = [
+  'PARKING_SESSION_ENTERED_FROM_EDGE',
+  'PARKING_SESSION_EXITED_FROM_EDGE',
   'PARKING_SESSION_EXITED_UNPAID_EDGE_SYNC_REQUIRED',
+  'SENSOR_TELEMETRY_REPORTED_FROM_EDGE',
+  'PARKING_SPACE_STATUS_CHANGED_FROM_EDGE',
 ];
 
 @Injectable()
@@ -78,7 +82,7 @@ export class EdgeCloudPushWorkerService
       [
         `Edge cloud push worker init.`,
         `enabled=${enabled}`,
-        `APP_MODE=${process.env.APP_MODE ?? 'undefined'}`,
+        `APP_MODE=${process.env.APP_PROFILE ?? process.env.APP_MODE ?? 'undefined'}`,
         `EDGE_CLOUD_PUSH_WORKER_ENABLED=${
           process.env.EDGE_CLOUD_PUSH_WORKER_ENABLED ?? 'undefined'
         }`,
@@ -121,7 +125,7 @@ export class EdgeCloudPushWorkerService
       running: this.running,
       intervalMs: this.getIntervalMs(),
       pushLimit: this.getPushLimit(),
-      appMode: process.env.APP_MODE ?? null,
+      appMode: process.env.APP_PROFILE ?? process.env.APP_MODE ?? null,
       edgeNodeId: process.env.EDGE_NODE_ID ?? null,
       cloudApiBaseUrl:
         process.env.CLOUD_API_BASE_URL ??
@@ -346,15 +350,17 @@ export class EdgeCloudPushWorkerService
       const response = await this.pushEventsToCloud([event]);
       const result = this.findPushResult(response, event.eventId);
 
-      if (!response.ok || !result?.ok) {
-        const reason =
-          result?.error ??
-          `Cloud push rejected eventId=${event.eventId}`;
+      const failureReason = this.resolveCloudPushFailureReason(
+        event,
+        response,
+        result,
+      );
 
-        await this.markOutboxFailed(outbox.id, reason);
+      if (failureReason) {
+        await this.markOutboxFailed(outbox.id, failureReason);
 
         this.logger.warn(
-          `Edge cloud push rejected. outboxId=${outbox.id}, eventId=${event.eventId}, error=${reason}`,
+          `Edge cloud push rejected. outboxId=${outbox.id}, eventId=${event.eventId}, error=${failureReason}`,
         );
 
         return {
@@ -368,7 +374,7 @@ export class EdgeCloudPushWorkerService
       await this.markOutboxAcked(outbox.id);
 
       this.logger.log(
-        `Edge cloud push acked. outboxId=${outbox.id}, eventType=${event.eventType}, eventId=${event.eventId}, action=${result.action}`,
+        `Edge cloud push acked. outboxId=${outbox.id}, eventType=${event.eventType}, eventId=${event.eventId}, action=${result?.action ?? 'UNKNOWN'}`,
       );
 
       return {
@@ -430,6 +436,41 @@ export class EdgeCloudPushWorkerService
     return (await response.json()) as CloudPushResponse;
   }
 
+  private resolveCloudPushFailureReason(
+    event: CloudPushEvent,
+    response: CloudPushResponse,
+    result: any,
+  ) {
+    if (!response.ok) {
+      return `Cloud push response was not ok for eventId=${event.eventId}`;
+    }
+
+    if (!result) {
+      return `Cloud push result not found for eventId=${event.eventId}`;
+    }
+
+    if (!result.ok) {
+      return result.error ?? `Cloud push rejected eventId=${event.eventId}`;
+    }
+
+    if (result.error) {
+      return result.error;
+    }
+
+    if (result.action === 'PROCESSING_FAILED') {
+      return `Cloud processing failed for eventId=${event.eventId}`;
+    }
+
+    if (
+      EDGE_TO_CLOUD_EVENT_TYPES.includes(event.eventType) &&
+      result.processed === false
+    ) {
+      return `Cloud did not process required edge event. eventId=${event.eventId}, action=${result.action ?? 'UNKNOWN'}`;
+    }
+
+    return null;
+  }
+
   private findPushResult(response: CloudPushResponse, eventId: string) {
     if (!Array.isArray(response.results)) {
       return null;
@@ -480,7 +521,7 @@ export class EdgeCloudPushWorkerService
   }
 
   private shouldRun() {
-    const appMode = (process.env.APP_MODE ?? 'cloud').toLowerCase();
+    const appMode = (process.env.APP_PROFILE ?? process.env.APP_MODE ?? 'cloud').toLowerCase();
     const enabled =
       (
         process.env.EDGE_CLOUD_PUSH_WORKER_ENABLED ??

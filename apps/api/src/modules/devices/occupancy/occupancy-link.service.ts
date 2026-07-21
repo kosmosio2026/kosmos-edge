@@ -2,6 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { Prisma, SessionStatus, SpaceStatus } from '@parking/db';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { InvoicesService } from '../../invoices/invoices.service';
+import {
+  enqueueEdgeParkingSessionSync,
+  enqueueEdgeUnpaidExitSync,
+} from '../../../common/sync/edge-parking-session-sync';
 
 @Injectable()
 export class OccupancyLinkService {
@@ -16,7 +20,7 @@ export class OccupancyLinkService {
 
   async getLinkedSpaceByDevEui(devEui: string) {
     return this.prisma.sensorDevice.findUnique({
-      where: { devEui: devEui.toLowerCase() },
+      where: { devEui: devEui.trim().replace(/[\s:-]/g, '').toUpperCase() },
       include: {
         parkingSpace: {
           include: {
@@ -125,6 +129,20 @@ export class OccupancyLinkService {
         },
       );
 
+      await enqueueEdgeParkingSessionSync(
+        this.prisma,
+        {
+          eventType:
+            'PARKING_SESSION_ENTERED_FROM_EDGE',
+          session: created,
+          source:
+            'OCCUPANCY_LINK',
+          sensorDeviceId,
+          devEui:
+            device.devEui,
+        },
+      );
+
       return {
         ok: true,
         action: 'entry-recorded',
@@ -164,6 +182,7 @@ export class OccupancyLinkService {
           where: { id: activeSession.id },
           data: {
             status: SessionStatus.CLOSED,
+            exitSource: 'SENSOR',
             exitTime,
             billingClosedAt: exitTime,
             totalMinutes,
@@ -236,6 +255,42 @@ export class OccupancyLinkService {
         } as any,
       },
     });
+
+    await enqueueEdgeParkingSessionSync(
+      this.prisma,
+      {
+        eventType:
+          'PARKING_SESSION_EXITED_FROM_EDGE',
+        session:
+          updatedWithBilling,
+        invoice,
+        calculation,
+        source:
+          'OCCUPANCY_LINK',
+        sensorDeviceId,
+        devEui:
+          device.devEui,
+      },
+    );
+
+    if (invoice.unpaidAmount > 0) {
+      await enqueueEdgeUnpaidExitSync(
+        this.prisma,
+        {
+          session:
+            updatedWithBilling,
+          invoice,
+          calculation,
+          additionalFeeAmount,
+          additionalFeeReason,
+          source:
+            'OCCUPANCY_LINK',
+          sensorDeviceId,
+          devEui:
+            device.devEui,
+        },
+      );
+    }
 
     return {
       ok: true,
