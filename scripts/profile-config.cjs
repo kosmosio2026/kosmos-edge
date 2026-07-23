@@ -42,29 +42,10 @@ function resolveEnvFile(profile, target) {
   assertProfile(profile);
   assertTarget(target);
 
-  const targetDirectory = getTargetDirectory(target);
-  const directPath = path.join(
-    targetDirectory,
+  return path.join(
+    getTargetDirectory(target),
     `.env.${profile}`,
   );
-
-  if (fs.existsSync(directPath)) {
-    return directPath;
-  }
-
-  // Backward compatibility for the previous local profile.
-  if (profile === 'development') {
-    const legacyPath = path.join(
-      targetDirectory,
-      '.env.parking',
-    );
-
-    if (fs.existsSync(legacyPath)) {
-      return legacyPath;
-    }
-  }
-
-  return directPath;
 }
 
 function getAppMode(profile) {
