@@ -6,8 +6,8 @@ export class PublicParkingController {
   constructor(private readonly service: PublicParkingService) {}
 
   @Get('regions')
-  getRegions() {
-    return this.service.getRegions();
+  getRegions(@Query('operationMode') operationMode?: string) {
+    return this.service.getRegions(operationMode);
   }
 
   @Get()
@@ -16,11 +16,10 @@ export class PublicParkingController {
     @Query('district') district?: string,
     @Query('sido') legacySido?: string,
     @Query('sigungu') legacySigungu?: string,
-  ) {
+    @Query('operationMode') operationMode?: string) {
     return this.service.getParkingLots(
       region || legacySido,
-      district || legacySigungu,
-    );
+      district || legacySigungu, operationMode);
   }
 
   @Get(':parkingLotId/sections')

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { BillingModule } from '../billing/billing.module';
+import { FacilitiesModule } from '../facilities/facilities.module';
 
 import { PrismaModule } from '../../prisma/prisma.module';
 import { RedisPublisher } from '../../common/redis/redis.publisher';
@@ -29,7 +30,15 @@ import { OccupancyLinkService } from './occupancy/occupancy-link.service';
 import { OccupancyEventService } from './occupancy/occupancy-event.service';
 
 @Module({
-  imports: [BillingModule, PrismaModule, RealtimeModule, RbacModule, SessionsModule, InvoicesModule],
+  imports: [
+    BillingModule,
+    FacilitiesModule,
+    PrismaModule,
+    RealtimeModule,
+    RbacModule,
+    SessionsModule,
+    InvoicesModule,
+  ],
   controllers: [
     DevicesController,
     DeviceFaultsController,

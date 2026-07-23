@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 type Role = 'admin' | 'manager';
 
@@ -54,6 +54,13 @@ type DisplayBoard = {
       code?: string | null;
     } | null;
   }>;
+};
+
+type ParkingLotOption = {
+  id: string;
+  name: string;
+  code?: string | null;
+  address?: string | null;
 };
 
 type ParkingSectionOption = {
@@ -192,11 +199,76 @@ function boardToDraft(board: DisplayBoard) {
 
 export default function DisplaySettingsPage({ role, boardId }: Props) {
   const [boards, setBoards] = useState<DisplayBoard[]>([]);
+  const [parkingLots, setParkingLots] = useState<ParkingLotOption[]>([]);
+  const [selectedParkingLotId, setSelectedParkingLotId] = useState('');
   const [drafts, setDrafts] = useState<Record<string, any>>({});
   const [moduleDrafts, setModuleDrafts] = useState<Record<string, any[]>>({});
   const [sections, setSections] = useState<ParkingSectionOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
+
+  const visibleBoards = useMemo(
+    () =>
+      selectedParkingLotId
+        ? boards.filter(
+            (board) =>
+              board.parkingLotId === selectedParkingLotId,
+          )
+        : boards.slice(0, 1),
+    [boards, selectedParkingLotId],
+  );
+
+  const selectedBoard = visibleBoards[0] ?? null;
+
+  function selectParkingLot(parkingLotId: string) {
+    setSelectedParkingLotId(parkingLotId);
+
+    const url = new URL(window.location.href);
+
+    if (parkingLotId) {
+      url.searchParams.set('parkingLotId', parkingLotId);
+    } else {
+      url.searchParams.delete('parkingLotId');
+    }
+
+    window.history.replaceState(
+      null,
+      '',
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  }
+
+  async function toggleBoardEnabled(board: DisplayBoard) {
+    const nextEnabled = !board.enabled;
+
+    setMessage(
+      nextEnabled
+        ? '전광판을 활성화하는 중입니다...'
+        : '전광판을 비활성화하는 중입니다...',
+    );
+
+    try {
+      await apiFetch(`/display/boards/${board.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          enabled: nextEnabled,
+        }),
+      });
+
+      setMessage(
+        nextEnabled
+          ? '전광판을 활성화했습니다.'
+          : '전광판을 비활성화했습니다.',
+      );
+
+      await load();
+    } catch (error: any) {
+      setMessage(
+        error?.message ??
+          '전광판 운영 상태 변경에 실패했습니다.',
+      );
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -209,6 +281,66 @@ export default function DisplaySettingsPage({ role, boardId }: Props) {
         : allBoards;
 
       setBoards(nextBoards);
+
+      let nextParkingLots: ParkingLotOption[] = [];
+
+      try {
+        nextParkingLots =
+          await apiFetch<ParkingLotOption[]>(
+            '/facilities/lots',
+          );
+      } catch {
+        nextParkingLots = allBoards.map((board) => ({
+          id: board.parkingLotId,
+          name: board.parkingLot?.name ?? board.name,
+          code: board.parkingLot?.code ?? null,
+        }));
+      }
+
+      setParkingLots(nextParkingLots);
+
+      const requestedParkingLotId =
+        new URLSearchParams(window.location.search).get(
+          'parkingLotId',
+        );
+
+      const boardParkingLotId = boardId
+        ? allBoards.find((board) => board.id === boardId)
+            ?.parkingLotId
+        : null;
+
+      setSelectedParkingLotId((current) => {
+        if (
+          current &&
+          nextParkingLots.some((lot) => lot.id === current)
+        ) {
+          return current;
+        }
+
+        if (
+          requestedParkingLotId &&
+          nextParkingLots.some(
+            (lot) => lot.id === requestedParkingLotId,
+          )
+        ) {
+          return requestedParkingLotId;
+        }
+
+        if (
+          boardParkingLotId &&
+          nextParkingLots.some(
+            (lot) => lot.id === boardParkingLotId,
+          )
+        ) {
+          return boardParkingLotId;
+        }
+
+        return (
+          nextParkingLots[0]?.id ??
+          nextBoards[0]?.parkingLotId ??
+          ''
+        );
+      });
 
       try {
         const nextSections = await apiFetch<ParkingSectionOption[]>('/parking/sections');
@@ -398,6 +530,91 @@ export default function DisplaySettingsPage({ role, boardId }: Props) {
         </a>
       </div>
 
+
+      <section className="mt-5 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <label className="grid flex-1 gap-2">
+            <span className="text-sm font-bold text-slate-700 dark:text-slate-200">
+              주차장 선택
+            </span>
+
+            <select
+              id="display-settings-parking-lot"
+              name="parkingLotId"
+              value={selectedParkingLotId}
+              onChange={(event) =>
+                selectParkingLot(event.target.value)
+              }
+              className="h-12 rounded-2xl border border-slate-200 bg-white px-4 font-bold text-slate-900 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            >
+              {parkingLots.map((lot) => {
+                const board = boards.find(
+                  (item) => item.parkingLotId === lot.id,
+                );
+
+                return (
+                  <option key={lot.id} value={lot.id}>
+                    {lot.code ? `${lot.code} - ` : ''}
+                    {lot.name}
+                    {' · '}
+                    {board
+                      ? board.enabled
+                        ? '전광판 활성'
+                        : '전광판 비활성'
+                      : '전광판 미등록'}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+
+          <div className="flex flex-wrap items-center gap-3">
+            {selectedBoard ? (
+              <>
+                <div className="rounded-2xl bg-slate-100 px-4 py-3 text-xs text-slate-600 dark:bg-slate-950 dark:text-slate-300">
+                  <div className="font-bold">
+                    Controller ID
+                  </div>
+                  <div className="mt-1 break-all">
+                    {selectedBoard.id}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    toggleBoardEnabled(selectedBoard)
+                  }
+                  className={
+                    selectedBoard.enabled
+                      ? 'rounded-2xl border border-red-200 bg-red-50 px-5 py-3 text-sm font-bold text-red-700 hover:bg-red-100'
+                      : 'rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-bold text-emerald-700 hover:bg-emerald-100'
+                  }
+                >
+                  {selectedBoard.enabled
+                    ? '이 주차장 전광판 비활성화'
+                    : '이 주차장 전광판 활성화'}
+                </button>
+              </>
+            ) : role === 'admin' &&
+              selectedParkingLotId ? (
+              <a
+                href={`/admin/display/settings/new?parkingLotId=${encodeURIComponent(
+                  selectedParkingLotId,
+                )}`}
+                className="rounded-2xl bg-blue-600 px-5 py-3 text-sm font-bold text-white hover:bg-blue-700"
+              >
+                이 주차장 전광판 등록
+              </a>
+            ) : (
+              <div className="rounded-2xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-700">
+                이 주차장에는 등록된 전광판이 없습니다.
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
       {message && (
         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 text-sm shadow-sm dark:border-slate-800 dark:bg-slate-900">
           {message}
@@ -408,7 +625,7 @@ export default function DisplaySettingsPage({ role, boardId }: Props) {
         <div className="mt-8">불러오는 중...</div>
       ) : (
         <div className="mt-6 grid gap-6">
-          {boards.map((board) => {
+          {visibleBoards.map((board) => {
             const draft = drafts[board.id] ?? boardToDraft(board);
 
             return (

@@ -39,6 +39,7 @@ export default function MembersPage({ role = 'admin' }: Props) {
   const [items, setItems] = useState<MemberItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<MemberItem | null>(null);
 
   const query = useMemo(
     () => parseTableQueryFromSearchParams(searchParams),
@@ -127,8 +128,7 @@ export default function MembersPage({ role = 'admin' }: Props) {
               <th className="px-5 py-3">이름</th>
               <th className="px-5 py-3">이메일</th>
               <th className="px-5 py-3">전화번호</th>
-              <th className="px-5 py-3">Vehicle</th>
-              <th className="px-5 py-3">Approved</th>
+              <th className="px-5 py-3">차량 번호</th>
             </tr>
           </thead>
 
@@ -142,7 +142,15 @@ export default function MembersPage({ role = 'admin' }: Props) {
                     index,
                   })}
                 </td>
-                <td className="px-5 py-3">{item.name ?? '-'}</td>
+                <td className="px-5 py-3">
+                  <button
+                    type="button"
+                    onClick={() => setSelected(item)}
+                    className="font-bold text-blue-700 hover:underline"
+                  >
+                    {item.name ?? '-'}
+                  </button>
+                </td>
                 <td className="px-5 py-3">{item.email ?? '-'}</td>
                 <td className="px-5 py-3">
                   {item.memberProfile?.phone ?? item.phone ?? '-'}
@@ -150,16 +158,13 @@ export default function MembersPage({ role = 'admin' }: Props) {
                 <td className="px-5 py-3">
                   {item.memberProfile?.vehicleNo ?? item.plateNumber ?? '-'}
                 </td>
-                <td className="px-5 py-3">
-                  {item.isApproved ? 'Approved' : 'Pending'}
-                </td>
               </tr>
             ))}
 
             {!loading && filteredItems.length === 0 ? (
               <tr>
                 <td
-                  colSpan={6}
+                  colSpan={5}
                   className="px-5 py-10 text-center text-slate-500"
                 >
                   회원이 없습니다.
@@ -171,6 +176,49 @@ export default function MembersPage({ role = 'admin' }: Props) {
       </div>
 
       <PaginationBar meta={meta} />
+
+      {selected ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <section className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-black uppercase tracking-[0.2em] text-blue-600">
+                  Member Detail
+                </p>
+                <h2 className="mt-2 text-2xl font-black text-slate-950">회원 상세 정보</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelected(null)}
+                className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-bold text-slate-700"
+              >
+                닫기
+              </button>
+            </div>
+
+            <div className="mt-5 overflow-hidden rounded-2xl border">
+              <table className="w-full text-sm">
+                <tbody>
+                  {[
+                    ['이름', selected.name ?? '-'],
+                    ['이메일', selected.email ?? '-'],
+                    ['전화번호', selected.memberProfile?.phone ?? selected.phone ?? '-'],
+                    ['차량 번호', selected.memberProfile?.vehicleNo ?? selected.plateNumber ?? '-'],
+                    ['승인 상태', selected.isApproved ? '승인' : '대기'],
+                  ].map(([label, value]) => (
+                    <tr key={label} className="border-b last:border-b-0">
+                      <th className="w-40 bg-slate-50 px-4 py-3 text-left font-black text-slate-600">
+                        {label}
+                      </th>
+                      <td className="px-4 py-3 text-slate-900">{value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }

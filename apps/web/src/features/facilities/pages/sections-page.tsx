@@ -539,10 +539,10 @@ export default function SectionsPage({ role = 'admin' }: Props) {
           >
             <div className="mb-5">
               <h2 className="text-lg font-bold">
-                {editing ? 'Edit Section' : '구역 추가'}
+                {editing ? '구역 수정' : '구역 추가'}
               </h2>
               <p className="text-sm text-slate-500">
-                Select region and parking lot, then enter section information.
+                지역과 주차장을 선택한 뒤 구역 정보를 입력하세요.
               </p>
             </div>
 
@@ -560,7 +560,7 @@ export default function SectionsPage({ role = 'admin' }: Props) {
                   }
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:border-blue-500"
                 >
-                  <option value="">All regions</option>
+                  <option value="">전체 지역</option>
                   {regions.map((region) => (
                     <option key={region} value={region}>
                       {region}
@@ -571,7 +571,7 @@ export default function SectionsPage({ role = 'admin' }: Props) {
 
               <label className="block">
                 <span className="text-sm font-medium text-slate-700">
-                  Parking Lot
+                  주차장
                 </span>
                 <select
                   value={form.parkingLotId}
@@ -583,7 +583,7 @@ export default function SectionsPage({ role = 'admin' }: Props) {
                   }
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:border-blue-500"
                 >
-                  <option value="">Select parking lot</option>
+                  <option value="">주차장 선택</option>
                   {filteredLots.map((lot) => (
                     <option key={lot.id} value={lot.id}>
                       {lot.name} {lot.code ? `(${lot.code})` : ''}
@@ -605,14 +605,14 @@ export default function SectionsPage({ role = 'admin' }: Props) {
 
               <label className="block">
                 <span className="text-sm font-medium text-slate-700">
-                  Section Code
+                  구역 코드
                 </span>
                 <input
                   value={form.code}
                   onChange={(event) =>
                     setForm((prev) => ({ ...prev, code: event.target.value }))
                   }
-                  placeholder="Unique inside selected parking lot"
+                  placeholder="선택한 주차장 안에서 고유한 코드"
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:border-blue-500"
                 />
               </label>
@@ -628,14 +628,14 @@ export default function SectionsPage({ role = 'admin' }: Props) {
                 }}
                 className="rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-slate-50"
               >
-                Cancel
+                취소
               </button>
               <button
                 type="submit"
                 disabled={saving}
                 className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
               >
-                {saving ? 'Saving...' : editing ? 'Update' : 'Create'}
+                {saving ? '저장 중...' : editing ? '수정' : '등록'}
               </button>
             </div>
           </form>
@@ -648,9 +648,9 @@ export default function SectionsPage({ role = 'admin' }: Props) {
             onSubmit={submitRequest}
             className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl"
           >
-            <h2 className="text-lg font-bold">Request Section</h2>
+            <h2 className="text-lg font-bold">구역 권한 요청</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Select the section you want to operate.
+              운영할 구역을 선택하세요.
             </p>
 
             <div className="mt-5 space-y-4">
@@ -667,7 +667,7 @@ export default function SectionsPage({ role = 'admin' }: Props) {
                   }
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:border-blue-500"
                 >
-                  <option value="">All regions</option>
+                  <option value="">전체 지역</option>
                   {regions.map((region) => (
                     <option key={region} value={region}>
                       {region}
@@ -678,7 +678,7 @@ export default function SectionsPage({ role = 'admin' }: Props) {
 
               <label className="block">
                 <span className="text-sm font-medium text-slate-700">
-                  Parking Lot
+                  주차장
                 </span>
                 <select
                   value={requestForm.parkingLotId}
@@ -691,7 +691,7 @@ export default function SectionsPage({ role = 'admin' }: Props) {
                   }
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:border-blue-500"
                 >
-                  <option value="">Select parking lot</option>
+                  <option value="">주차장 선택</option>
                   {requestLots.map((lot) => (
                     <option key={lot.id} value={lot.id}>
                       {lot.region ? `[${lot.region}] ` : ''}
@@ -702,7 +702,7 @@ export default function SectionsPage({ role = 'admin' }: Props) {
               </label>
 
               <label className="block">
-                <span className="text-sm font-medium text-slate-700">Section</span>
+                <span className="text-sm font-medium text-slate-700">구역</span>
                 <select
                   value={requestForm.sectionId}
                   onChange={(event) =>
@@ -713,7 +713,7 @@ export default function SectionsPage({ role = 'admin' }: Props) {
                   }
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:border-blue-500"
                 >
-                  <option value="">Select section</option>
+                  <option value="">구역 선택</option>
                   {requestSections.map((section) => (
                     <option key={section.id} value={section.id}>
                       {section.name} {section.code ? `(${section.code})` : ''}
@@ -729,14 +729,14 @@ export default function SectionsPage({ role = 'admin' }: Props) {
                 onClick={() => setRequestOpen(false)}
                 className="rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-slate-50"
               >
-                Cancel
+                취소
               </button>
               <button
                 type="submit"
                 disabled={requestSaving}
                 className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
               >
-                {requestSaving ? 'Submitting...' : 'Submit'}
+                {requestSaving ? '요청 중...' : '요청'}
               </button>
             </div>
           </form>

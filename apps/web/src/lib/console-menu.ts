@@ -1,6 +1,10 @@
 import type { AuthUser, LoginMenuItem, LoginRole } from '@/types/auth';
 import { PERMISSIONS } from '@/lib/rbac/permissions';
 import { FEATURES } from '@/lib/features';
+import {
+  isConnectedEdgeWeb,
+  isEdgeWeb,
+} from '@/lib/app-profile';
 
 export type MenuGroup =
   | 'dashboard'
@@ -25,6 +29,32 @@ export type ConsoleMenuEntry = LoginMenuItem & {
 };
 
 export type ScopeLevel = 'global' | 'lot' | 'section';
+
+
+function isHiddenOnCurrentAppProfile(entry: ConsoleMenuEntry): boolean {
+  /*
+   * 주차장 신청은 Cloud 승인 흐름과 연결된 Connected Edge에서만 사용한다.
+   *
+   * cloud:
+   *   매니저가 주차장을 신청하는 실행 환경이 아니므로 숨김.
+   *
+   * edge:
+   *   Cloud에 주차장 접근/생성을 신청해야 하므로 표시.
+   *
+   * edge-standalone:
+   *   Admin 개입 없이 Manager가 단독 운영하므로 숨김.
+   */
+  if (
+    entry.href === '/manager/requests/parking-lots' &&
+    !isConnectedEdgeWeb()
+  ) {
+    return true;
+  }
+
+  if (!isEdgeWeb()) return false;
+
+  return entry.href === '/admin' || entry.href.startsWith('/admin/');
+}
 
 function menu(
   entry: Omit<ConsoleMenuEntry, 'scopeLevel'> & {
@@ -55,7 +85,7 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     description: '서비스 및 하드웨어 제어',
   }),
   menu({
-    label: '지도',
+    label: '지도 보기',
     href: '/admin/map',
     roles: ['ADMIN'],
     permission: PERMISSIONS.OPERATOR_DASHBOARD_READ,
@@ -65,7 +95,7 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     description: '주차장 지도 및 주차면 상태',
   }),
   menu({
-    label: '그리드',
+    label: '그리드 보기',
     href: '/admin/grid',
     roles: ['ADMIN'],
     permission: PERMISSIONS.OPERATOR_DASHBOARD_READ,
@@ -96,7 +126,7 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     description: '권한 서비스 및 하드웨어 제어',
   }),
   menu({
-    label: '지도',
+    label: '지도 보기',
     href: '/manager/map',
     roles: ['MANAGER'],
     permission: PERMISSIONS.OPERATOR_DASHBOARD_READ,
@@ -106,7 +136,7 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     description: '권한 주차장 지도 및 주차면 상태',
   }),
   menu({
-    label: '그리드',
+    label: '그리드 보기',
     href: '/manager/grid',
     roles: ['MANAGER'],
     permission: PERMISSIONS.OPERATOR_DASHBOARD_READ,
@@ -147,7 +177,7 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     description: '매니저 주차장 신청 승인',
   }),
   menu({
-    label: '운영자 구역 신청',
+    label: '운영자 구역 승인',
     href: '/admin/approvals/operator-sections',
     roles: ['ADMIN'],
     permission: PERMISSIONS.USER_MANAGE,
@@ -155,6 +185,16 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     order: 23,
     scopeLevel: 'global',
     description: '운영자 섹션 신청 승인',
+  }),
+  menu({
+    label: '입주사 승인',
+    href: '/admin/approvals/tenants',
+    roles: ['ADMIN'],
+    permission: PERMISSIONS.USER_MANAGE,
+    group: 'approvals',
+    order: 74,
+    scopeLevel: 'global',
+    description: '입주사 신청 승인',
   }),
   menu({
     label: 'Watcher 승인',
@@ -188,7 +228,7 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     description: '운영자 승인 요청 관리',
   }),
   menu({
-    label: '운영자 구역 신청',
+    label: '운영자 구역 승인',
     href: '/manager/approvals/operator-sections',
     roles: ['MANAGER'],
     permission: PERMISSIONS.USER_MANAGE,
@@ -196,6 +236,16 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     order: 22,
     scopeLevel: 'lot',
     description: '운영자 섹션 신청 승인',
+  }),
+  menu({
+    label: '입주사 승인',
+    href: '/manager/approvals/tenants',
+    roles: ['MANAGER'],
+    permission: PERMISSIONS.USER_MANAGE,
+    group: 'approvals',
+    order: 74,
+    scopeLevel: 'lot',
+    description: '권한 주차장 입주사 신청 승인',
   }),
   menu({
     label: '주차장 신청',
@@ -601,14 +651,14 @@ export const consoleMenus: ConsoleMenuEntry[] = [
   }),
   */
   menu({
-    label: 'Tenant 관리',
-    href: '/admin/tenants',
+    label: '주차장운영사',
+    href: '/admin/management-companies',
     roles: ['ADMIN'],
     permission: PERMISSIONS.USER_MANAGE,
     group: 'users',
     order: 57,
     scopeLevel: 'global',
-    description: '회사/조직 Tenant 관리',
+    description: '주차장 운영사 및 관리 회사 관리',
   }),
   menu({
     label: '관리자',
@@ -632,6 +682,7 @@ export const consoleMenus: ConsoleMenuEntry[] = [
   }),
     /**
   
+
   menu({
     label: '사용자 승인',
     href: '/manager/users',
@@ -653,6 +704,17 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     scopeLevel: 'lot',
     description: '권한 주차장 운영자 관리',
   }),
+
+  menu({
+    label: '입주사',
+    href: '/admin/users/tenants',
+    roles: ['ADMIN'],
+    permission: PERMISSIONS.USER_MANAGE,
+    group: 'users',
+    order: 59.5,
+    scopeLevel: 'global',
+    description: '입주사 정보 관리',
+  }),
   menu({
     label: '회원',
     href: '/admin/users/members',
@@ -662,6 +724,16 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     order: 60,
     scopeLevel: 'global',
     description: '회원 관리',
+  }),
+  menu({
+    label: '입주사',
+    href: '/manager/users/tenants',
+    roles: ['MANAGER'],
+    permission: PERMISSIONS.USER_MANAGE,
+    group: 'users',
+    order: 59.5,
+    scopeLevel: 'lot',
+    description: '권한 주차장 입주사 정보',
   }),
   menu({
     label: '회원',
@@ -732,7 +804,7 @@ export const consoleMenus: ConsoleMenuEntry[] = [
   scopeLevel: 'global',
 },
 {
-  label: '지도',
+  label: '지도 보기',
   description: '주차장 지도 및 주차면 상태',
   href: '/operator/map',
   roles: ['OPERATOR'],
@@ -755,7 +827,7 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     description: '매출 및 미수금 요약',
   }),
   menu({
-    label: '그리드',
+    label: '그리드 보기',
     href: '/operator/grid',
     roles: ['OPERATOR'],
     permission: PERMISSIONS.OPERATOR_DASHBOARD_READ,
@@ -787,7 +859,7 @@ export const consoleMenus: ConsoleMenuEntry[] = [
   }),
 
   menu({
-    label: '정산/결제',
+    label: '수금 현황',
     href: '/admin/billing',
     roles: ['ADMIN'],
     permission: PERMISSIONS.PAYMENT_MANAGE,
@@ -797,7 +869,7 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     description: '정산 및 요금 처리',
   }),
   menu({
-    label: '정산/결제',
+    label: '수금 현황',
     href: '/manager/billing',
     roles: ['MANAGER'],
     permission: PERMISSIONS.PAYMENT_MANAGE,
@@ -807,7 +879,7 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     description: '권한 정산 및 요금 처리',
   }),
   menu({
-    label: '정산/결제',
+    label: '수금 현황',
     href: '/operator/billing',
     roles: ['OPERATOR'],
     permission: PERMISSIONS.PAYMENT_READ,
@@ -849,6 +921,16 @@ export const consoleMenus: ConsoleMenuEntry[] = [
   }),
 
   menu({
+    label: '입주사 정산',
+    href: '/admin/billing/tenant-statements',
+    roles: ['ADMIN'],
+    permission: PERMISSIONS.SETTLEMENT_MANAGE,
+    group: 'billing',
+    order: 82,
+    scopeLevel: 'global',
+    description: '입주사 방문주차 월별 정산',
+  }),
+  menu({
     label: '정산 마감',
     href: '/admin/billing/settlement',
     roles: ['ADMIN'],
@@ -857,6 +939,16 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     order: 82,
     scopeLevel: 'global',
     description: '일별 정산 마감',
+  }),
+  menu({
+    label: '입주사 정산',
+    href: '/manager/billing/tenant-statements',
+    roles: ['MANAGER'],
+    permission: PERMISSIONS.SETTLEMENT_MANAGE,
+    group: 'billing',
+    order: 82,
+    scopeLevel: 'lot',
+    description: '입주사 방문주차 월별 정산',
   }),
   menu({
     label: '정산 마감',
@@ -1012,6 +1104,16 @@ export const consoleMenus: ConsoleMenuEntry[] = [
     scopeLevel: 'global',
     description: '운영자 설정',
   }),
+  menu({
+    label: 'Edge 관리',
+    href: '/admin/edge-nodes',
+    roles: ['ADMIN'],
+    permission: PERMISSIONS.RBAC_MANAGE,
+    group: 'system',
+    order: 95,
+    scopeLevel: 'global',
+    description: 'Edge 노드, API Key, 매니저 매칭, 주차장 연결 관리',
+  }),
 ];
 
 function isVisibleByFeature(item: ConsoleMenuEntry) {
@@ -1022,7 +1124,9 @@ function isVisibleByFeature(item: ConsoleMenuEntry) {
   return true;
 }
 
-export const visibleConsoleMenus = consoleMenus.filter(isVisibleByFeature);
+export const visibleConsoleMenus = consoleMenus
+  .filter(isVisibleByFeature)
+  .filter((entry) => !isHiddenOnCurrentAppProfile(entry));
 
 
 function hasPermission(user: AuthUser, permission?: string) {
@@ -1032,7 +1136,17 @@ function hasPermission(user: AuthUser, permission?: string) {
 }
 
 function hasRole(user: AuthUser, roles: LoginRole[]) {
-  return roles.some((role) => user.roles.includes(role));
+  if (roles.some((role) => user.roles.includes(role))) {
+    return true;
+  }
+
+  // Edge Web hides Cloud-only /admin screens.
+  // ADMIN users on Edge should still be able to use manager-level operation screens.
+  if (isEdgeWeb() && user.roles.includes('ADMIN') && roles.includes('MANAGER')) {
+    return true;
+  }
+
+  return false;
 }
 
 function scopeCount(
@@ -1108,11 +1222,30 @@ export function getVisibleConsoleMenuGroups(user: AuthUser | null | undefined) {
 
 export function getDefaultConsoleHome(user: AuthUser | null | undefined) {
   if (!user) return '/login';
-  if (user.roles.includes('ADMIN')) return '/admin/dashboard';
-  if (user.roles.includes('MANAGER')) return '/manager/dashboard';
-  if (user.roles.includes('OPERATOR')) return '/operator/dashboard';
-  if (user.roles.includes('MEMBER')) return '/member';
-  if (user.roles.includes('VISITOR')) return '/visitor';
+
+  if (user.roles.includes('ADMIN') && !isEdgeWeb()) {
+    return '/admin/dashboard';
+  }
+
+  if (user.roles.includes('MANAGER')) {
+    return '/manager/dashboard';
+  }
+
+  if (user.roles.includes('OPERATOR')) {
+    return '/operator/dashboard';
+  }
+
+  if (user.roles.includes('ADMIN') && isEdgeWeb()) {
+    return '/manager/dashboard';
+  }
+
+  if (user.roles.includes('MEMBER')) {
+    return '/member';
+  }
+
+  if (user.roles.includes('VISITOR')) {
+    return '/visitor';
+  }
 
   return '/';
 }

@@ -3,30 +3,34 @@ import {
   ExecutionContext,
   ForbiddenException,
   Injectable,
-} from "@nestjs/common";
-import { Reflector } from "@nestjs/core";
-import { APP_MODE_KEY } from "../decorators/app-mode.decorator";
-import { getAppMode, type AppMode } from "../config/app-mode";
+} from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { APP_MODE_KEY } from '../decorators/app-mode.decorator';
+import { getAppMode, getAppProfile, type AppProfile } from '../config/app-mode';
 
 @Injectable()
 export class AppModeGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
-    const allowedModes = this.reflector.getAllAndOverride<AppMode[]>(
+    const allowedProfiles = this.reflector.getAllAndOverride<AppProfile[]>(
       APP_MODE_KEY,
       [context.getHandler(), context.getClass()],
     );
 
-    if (!allowedModes || allowedModes.length === 0) {
+    if (!allowedProfiles || allowedProfiles.length === 0) {
       return true;
     }
 
+    const currentProfile = getAppProfile();
     const currentMode = getAppMode();
 
-    if (!allowedModes.includes(currentMode)) {
+    if (
+      !allowedProfiles.includes(currentProfile) &&
+      !allowedProfiles.includes(currentMode)
+    ) {
       throw new ForbiddenException(
-        `This endpoint is not available in ${currentMode} mode`,
+        `This endpoint is not available in ${currentProfile} profile`,
       );
     }
 

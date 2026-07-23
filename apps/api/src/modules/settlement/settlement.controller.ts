@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
 
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../common/guards/permission.guard';
@@ -15,8 +15,22 @@ export class SettlementController {
 
   @Get()
   @RequirePermission(PERMISSIONS.SETTLEMENT_READ)
-  listSettlements() {
-    return this.settlementService.listSettlements();
+  listSettlements(
+    @Query('parkingLotId') parkingLotId?: string,
+    @Query('year') year?: string,
+    @Query('month') month?: string,
+  ) {
+    return this.settlementService.listSettlements({
+      parkingLotId,
+      year,
+      month,
+    });
+  }
+
+  @Get('parking-lots')
+  @RequirePermission(PERMISSIONS.SETTLEMENT_READ)
+  listSettlementParkingLots() {
+    return this.settlementService.listSettlementParkingLots();
   }
 
   @Get('preview')
@@ -33,10 +47,11 @@ export class SettlementController {
 
   @Post('close')
   @RequirePermission(PERMISSIONS.SETTLEMENT_MANAGE)
-  close(@Body() dto: CloseSettlementDto) {
+  close(@Body() dto: CloseSettlementDto, @Req() req: any) {
     return this.settlementService.closeDailySettlement(
       dto.parkingLotId,
       dto.businessDate,
+      req.user?.id ?? req.user?.userId ?? req.user?.sub ?? null,
     );
   }
 }

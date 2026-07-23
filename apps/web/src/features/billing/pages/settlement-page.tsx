@@ -11,7 +11,7 @@ type Props = {
   role?: ConsoleRole;
 };
 
-type 정산Item = {
+type SettlementItem = {
   id: string;
   parkingLotId?: string | null;
   businessDate?: string | null;
@@ -21,6 +21,7 @@ type 정산Item = {
   totalOutstanding?: number | null;
   status?: string | null;
   closedAt?: string | null;
+  closedByUserId?: string | null;
   createdAt?: string | null;
   parkingLot?: {
     id: string;
@@ -29,7 +30,7 @@ type 정산Item = {
   } | null;
 };
 
-type 정산Preview = {
+type SettlementPreview = {
   ok: true;
   businessDate: string;
   parkingLotId: string;
@@ -38,11 +39,14 @@ type 정산Preview = {
   totalPaid: number;
   totalRefunded: number;
   totalOutstanding: number;
+  totalReceivable: number;
+  parkingFeeOutstanding: number;
   invoiceCount: number;
   paidInvoiceCount: number;
   partiallyPaidInvoiceCount: number;
   unpaidInvoiceCount: number;
   additionalFeeOutstanding: number;
+  additionalFeeInvoiceCount: number;
   parkingLot?: {
     id: string;
     name?: string | null;
@@ -54,6 +58,8 @@ type ParkingLotOption = {
   id: string;
   name?: string | null;
   code?: string | null;
+  isActive?: boolean | null;
+  spaceCount?: number | null;
 };
 
 function unwrapList<T>(value: unknown): T[] {
@@ -72,7 +78,7 @@ function formatCurrency(value?: number | null) {
   return `₩${Number(value ?? 0).toLocaleString()}`;
 }
 
-function format일자(value?: string | null) {
+function formatDateTime(value?: string | null) {
   if (!value) return '-';
 
   const date = new Date(value);
@@ -81,7 +87,7 @@ function format일자(value?: string | null) {
   return formatKstDateTime(date);
 }
 
-function get종료일day일자String() {
+function getTodayDateString() {
   const date = new Date();
   const yyyy = date.getFullYear();
   const mm = String(date.getMonth() + 1).padStart(2, '0');
@@ -90,18 +96,29 @@ function get종료일day일자String() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function getCurrentYearString() {
+  return String(new Date().getFullYear());
+}
+
+function getCurrentMonthString() {
+  return String(new Date().getMonth() + 1).padStart(2, '0');
+}
+
 function getParkingLotLabel(lot: ParkingLotOption) {
   return lot.name ?? lot.code ?? lot.id;
 }
 
-export default function 정산Page({ role = 'admin' }: Props) {
+export default function SettlementPage({ role = 'admin' }: Props) {
   const { session } = useAuth();
 
-  const [items, setItems] = useState<정산Item[]>([]);
-  const [preview, setPreview] = useState<정산Preview | null>(null);
+  const [items, setItems] = useState<SettlementItem[]>([]);
+  const [preview, setPreview] = useState<SettlementPreview | null>(null);
   const [parkingLots, setParkingLots] = useState<ParkingLotOption[]>([]);
   const [selectedParkingLotId, setSelectedParkingLotId] = useState('');
-  const [businessDate, setBusiness일자] = useState(get종료일day일자String());
+  const [businessDate, setBusinessDate] = useState(getTodayDateString());
+  const [listParkingLotId, setListParkingLotId] = useState('');
+  const [listYear, setListYear] = useState(getCurrentYearString());
+  const [listMonth, setListMonth] = useState(getCurrentMonthString());
   const [loading, setLoading] = useState(false);
   const [closing, setClosing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -115,27 +132,42 @@ export default function 정산Page({ role = 'admin' }: Props) {
     setError(null);
 
     try {
-      const result = await apiFetch('/billing/settlement', {
+      const query = new URLSearchParams();
+
+      if (listParkingLotId) query.set('parkingLotId', listParkingLotId);
+      if (listYear) query.set('year', listYear);
+      if (listMonth) query.set('month', listMonth);
+
+      const endpoint = query.toString()
+        ? `/billing/settlement?${query}`
+        : '/billing/settlement';
+
+      const result = await apiFetch(endpoint, {
         accessToken: session.accessToken,
       });
 
-      setItems(unwrapList<정산Item>(result));
+      setItems(unwrapList<SettlementItem>(result));
     } catch (error) {
       setError(
         error instanceof Error
           ? error.message
-          : '정산 정보를 불러오지 못했습니다.s.',
+          : '정산 정보를 불러오지 못했습니다.',
       );
     } finally {
       setLoading(false);
     }
-  }, [session?.accessToken]);
+  }, [
+    listMonth,
+    listParkingLotId,
+    listYear,
+    session?.accessToken,
+  ]);
 
   const loadParkingLots = useCallback(async () => {
     if (!session?.accessToken) return;
 
     try {
-      const result = await apiFetch('/facilities/lots', {
+      const result = await apiFetch('/billing/settlement/parking-lots', {
         accessToken: session.accessToken,
       });
 
@@ -145,10 +177,14 @@ export default function 정산Page({ role = 'admin' }: Props) {
       if (!selectedParkingLotId && lots[0]?.id) {
         setSelectedParkingLotId(lots[0].id);
       }
+
+      if (!listParkingLotId && lots[0]?.id) {
+        setListParkingLotId(lots[0].id);
+      }
     } catch {
       setParkingLots([]);
     }
-  }, [selectedParkingLotId, session?.accessToken]);
+  }, [listParkingLotId, selectedParkingLotId, session?.accessToken]);
 
   const loadPreview = useCallback(async () => {
     if (!session?.accessToken) return;
@@ -164,7 +200,7 @@ export default function 정산Page({ role = 'admin' }: Props) {
         accessToken: session.accessToken,
       });
 
-      setPreview(result as 정산Preview);
+      setPreview(result as SettlementPreview);
     } catch {
       setPreview(null);
     }
@@ -182,12 +218,12 @@ export default function 정산Page({ role = 'admin' }: Props) {
     void loadParkingLots();
   }, [loadParkingLots]);
 
-  const handleClose정산 = useCallback(async () => {
+  const handleCloseSettlement = useCallback(async () => {
     if (!session?.accessToken) return;
     if (!canManage) return;
 
     if (!selectedParkingLotId || !businessDate) {
-      setError('Parking lot and business date are required.');
+      setError('주차장과 영업일을 선택해 주세요.');
       return;
     }
 
@@ -213,7 +249,7 @@ export default function 정산Page({ role = 'admin' }: Props) {
       setError(
         error instanceof Error
           ? error.message
-          : 'Failed to close settlement.',
+          : '정산 마감에 실패했습니다.',
       );
     } finally {
       setClosing(false);
@@ -227,6 +263,8 @@ export default function 정산Page({ role = 'admin' }: Props) {
     session?.accessToken,
   ]);
 
+
+
   return (
     <main className="space-y-6 p-6">
       <div className="flex items-start justify-between gap-4">
@@ -239,14 +277,14 @@ export default function 정산Page({ role = 'admin' }: Props) {
 
         {!canManage ? (
           <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-            View only
+            조회 전용
           </span>
         ) : null}
       </div>
 
       <section className="rounded-2xl border bg-white p-5">
         <div className="mb-4">
-          <h2 className="text-base font-semibold">정산 Filter</h2>
+          <h2 className="text-base font-semibold">정산 필터</h2>
           <p className="text-sm text-slate-500">
             조회할 주차장과 한국 영업일을 선택합니다.
           </p>
@@ -276,12 +314,12 @@ export default function 정산Page({ role = 'admin' }: Props) {
 
           <label className="space-y-1">
             <span className="text-xs font-medium text-slate-500">
-              Business 일자
+              영업일
             </span>
             <input
               type="date"
               value={businessDate}
-              onChange={(event) => setBusiness일자(event.target.value)}
+              onChange={(event) => setBusinessDate(event.target.value)}
               className="w-full rounded-xl border px-3 py-2 text-sm"
             />
           </label>
@@ -291,7 +329,7 @@ export default function 정산Page({ role = 'admin' }: Props) {
       {canManage ? (
         <section className="rounded-2xl border bg-white p-5">
           <div className="mb-4">
-            <h2 className="text-base font-semibold">Close 일별 정산</h2>
+            <h2 className="text-base font-semibold">일별 정산 마감</h2>
             <p className="text-sm text-slate-500">
               선택한 주차장과 영업일 기준으로 일별 정산을 마감합니다.
             </p>
@@ -321,12 +359,12 @@ export default function 정산Page({ role = 'admin' }: Props) {
 
             <label className="space-y-1">
               <span className="text-xs font-medium text-slate-500">
-                Business 일자
+                영업일
               </span>
               <input
                 type="date"
                 value={businessDate}
-                onChange={(event) => setBusiness일자(event.target.value)}
+                onChange={(event) => setBusinessDate(event.target.value)}
                 className="w-full rounded-xl border px-3 py-2 text-sm"
               />
             </label>
@@ -335,10 +373,10 @@ export default function 정산Page({ role = 'admin' }: Props) {
               <button
                 type="button"
                 disabled={closing || !selectedParkingLotId || !businessDate}
-                onClick={() => void handleClose정산()}
+                onClick={() => void handleCloseSettlement()}
                 className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {closing ? 'Closing...' : 'Close'}
+                {closing ? '마감 처리 중...' : '마감 확정'}
               </button>
             </div>
           </div>
@@ -348,7 +386,7 @@ export default function 정산Page({ role = 'admin' }: Props) {
       <section className="rounded-2xl border bg-white p-5">
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-base font-semibold">일별 정산 Preview</h2>
+            <h2 className="text-base font-semibold">일별 정산 미리보기</h2>
             <p className="text-sm text-slate-500">
               마감 전 현재 영업일 기준 정산 예상치를 확인합니다.
             </p>
@@ -451,19 +489,84 @@ export default function 정산Page({ role = 'admin' }: Props) {
         <div className="text-sm text-slate-500">불러오는 중...</div>
       ) : null}
 
+      <section className="rounded-2xl border bg-white p-5">
+        <div className="mb-4">
+          <h2 className="text-base font-semibold">확정 정산 목록</h2>
+          <p className="text-sm text-slate-500">
+            마감 확정된 정산만 주차장, 년도, 월 기준으로 조회합니다.
+          </p>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-[1fr_160px_160px]">
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-slate-500">
+              주차장
+            </span>
+            <select
+              value={listParkingLotId}
+              onChange={(event) => setListParkingLotId(event.target.value)}
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+            >
+              <option value="">전체 주차장</option>
+              {parkingLots.map((lot) => (
+                <option key={lot.id} value={lot.id}>
+                  {getParkingLotLabel(lot)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-slate-500">
+              년도
+            </span>
+            <input
+              type="number"
+              min="2020"
+              max="2100"
+              value={listYear}
+              onChange={(event) => setListYear(event.target.value)}
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+            />
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-slate-500">
+              월
+            </span>
+            <select
+              value={listMonth}
+              onChange={(event) => setListMonth(event.target.value)}
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+            >
+              <option value="">전체 월</option>
+              {Array.from({ length: 12 }, (_, index) => {
+                const month = String(index + 1).padStart(2, '0');
+
+                return (
+                  <option key={month} value={month}>
+                    {month}월
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+        </div>
+      </section>
+
       <section className="overflow-x-auto rounded-2xl border bg-white">
         <table className="w-full min-w-[1000px] text-left text-sm">
           <thead className="bg-slate-50 text-slate-600">
             <tr>
               <th className="px-4 py-3">번호</th>
-              <th className="px-4 py-3">Business 일자</th>
+              <th className="px-4 py-3">영업일</th>
               <th className="px-4 py-3">주차장</th>
-              <th className="px-4 py-3">종료일tal Invoice</th>
-              <th className="px-4 py-3">종료일tal Paid</th>
-              <th className="px-4 py-3">종료일tal Refunded</th>
-              <th className="px-4 py-3">종료일tal Outstanding</th>
+              <th className="px-4 py-3">총 청구금액</th>
+              <th className="px-4 py-3">총 수금금액</th>
+              <th className="px-4 py-3">총 환불금액</th>
+              <th className="px-4 py-3">총 미수금액</th>
               <th className="px-4 py-3">상태</th>
-              <th className="px-4 py-3">Closed At</th>
+              <th className="px-4 py-3">정산 마감 일시</th>
             </tr>
           </thead>
 
@@ -506,7 +609,7 @@ export default function 정산Page({ role = 'admin' }: Props) {
                 </td>
 
                 <td className="px-4 py-3">
-                  {format일자(item.closedAt)}
+                  {formatDateTime(item.closedAt)}
                 </td>
               </tr>
             ))}
@@ -517,7 +620,7 @@ export default function 정산Page({ role = 'admin' }: Props) {
                   colSpan={9}
                   className="px-4 py-10 text-center text-slate-500"
                 >
-                  정산 내역이 없습니다.
+                  확정된 정산 내역이 없습니다.
                 </td>
               </tr>
             ) : null}

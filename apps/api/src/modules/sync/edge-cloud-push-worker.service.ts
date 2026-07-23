@@ -3,8 +3,9 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
-} from '@nestjs/common';
-import { PrismaService } from '../../prisma/prisma.service';
+} from "@nestjs/common";
+import { isConnectedEdgeProfile } from "../../common/config/app-mode";
+import { PrismaService } from "../../prisma/prisma.service";
 
 type CloudPushEvent = {
   eventId: string;
@@ -47,11 +48,14 @@ type WorkerRunResult = {
 };
 
 const EDGE_TO_CLOUD_EVENT_TYPES = [
-  'PARKING_SESSION_ENTERED_FROM_EDGE',
-  'PARKING_SESSION_EXITED_FROM_EDGE',
-  'PARKING_SESSION_EXITED_UNPAID_EDGE_SYNC_REQUIRED',
-  'SENSOR_TELEMETRY_REPORTED_FROM_EDGE',
-  'PARKING_SPACE_STATUS_CHANGED_FROM_EDGE',
+  "MANAGER_LOT_ACCESS_REQUESTED_EDGE_SYNC_REQUIRED",
+  "PARKING_LOT_CREATED_EDGE_SYNC_REQUIRED",
+  "PARKING_SESSION_ENTERED_FROM_EDGE",
+  "PARKING_SESSION_EXITED_FROM_EDGE",
+  "PARKING_SESSION_EXITED_UNPAID_EDGE_SYNC_REQUIRED",
+  "SENSOR_TELEMETRY_REPORTED_FROM_EDGE",
+  "PARKING_SPACE_STATUS_CHANGED_FROM_EDGE",
+  "DISPLAY_COMMAND_RESULT_FROM_EDGE",
 ];
 
 @Injectable()
@@ -82,27 +86,23 @@ export class EdgeCloudPushWorkerService
       [
         `Edge cloud push worker init.`,
         `enabled=${enabled}`,
-        `APP_MODE=${process.env.APP_PROFILE ?? process.env.APP_MODE ?? 'undefined'}`,
+        `APP_MODE=${process.env.APP_PROFILE ?? process.env.APP_MODE ?? "undefined"}`,
         `EDGE_CLOUD_PUSH_WORKER_ENABLED=${
-          process.env.EDGE_CLOUD_PUSH_WORKER_ENABLED ?? 'undefined'
+          process.env.EDGE_CLOUD_PUSH_WORKER_ENABLED ?? "undefined"
         }`,
-        `EDGE_NODE_ID=${process.env.EDGE_NODE_ID ?? 'undefined'}`,
-        `CLOUD_API_BASE_URL=${
-          process.env.CLOUD_API_BASE_URL ?? 'undefined'
-        }`,
-      ].join(' '),
+        `EDGE_NODE_ID=${process.env.EDGE_NODE_ID ?? "undefined"}`,
+        `CLOUD_API_BASE_URL=${process.env.CLOUD_API_BASE_URL ?? "undefined"}`,
+      ].join(" "),
     );
 
     if (!enabled) {
-      this.logger.log('Edge cloud push worker disabled');
+      this.logger.log("Edge cloud push worker disabled");
       return;
     }
 
     const intervalMs = this.getIntervalMs();
 
-    this.logger.log(
-      `Edge cloud push worker enabled. intervalMs=${intervalMs}`,
-    );
+    this.logger.log(`Edge cloud push worker enabled. intervalMs=${intervalMs}`);
 
     this.timer = setInterval(() => {
       void this.runOnce();
@@ -151,7 +151,7 @@ export class EdgeCloudPushWorkerService
 
     if (!this.shouldRun()) {
       this.logger.log(
-        'Edge cloud push worker run skipped because it is disabled',
+        "Edge cloud push worker run skipped because it is disabled",
       );
 
       return {
@@ -223,9 +223,7 @@ export class EdgeCloudPushWorkerService
       this.lastError = errorMessage;
       this.lastErrorAt = new Date().toISOString();
 
-      this.logger.error(
-        `Edge cloud push worker failed: ${errorMessage}`,
-      );
+      this.logger.error(`Edge cloud push worker failed: ${errorMessage}`);
     } finally {
       this.running = false;
 
@@ -267,7 +265,7 @@ export class EdgeCloudPushWorkerService
         },
       },
       orderBy: {
-        occurredAt: 'asc',
+        occurredAt: "asc",
       },
       take,
     });
@@ -278,7 +276,7 @@ export class EdgeCloudPushWorkerService
       const existing = await this.prisma.syncOutbox.findFirst({
         where: {
           domainEventId: domainEvent.id,
-          destination: 'CLOUD',
+          destination: "CLOUD",
         },
       });
 
@@ -289,8 +287,8 @@ export class EdgeCloudPushWorkerService
       await this.prisma.syncOutbox.create({
         data: {
           domainEventId: domainEvent.id,
-          destination: 'CLOUD',
-          status: 'PENDING' as any,
+          destination: "CLOUD",
+          status: "PENDING" as any,
         },
       });
 
@@ -305,8 +303,8 @@ export class EdgeCloudPushWorkerService
 
     return this.prisma.syncOutbox.findMany({
       where: {
-        destination: 'CLOUD',
-        status: 'PENDING' as any,
+        destination: "CLOUD",
+        status: "PENDING" as any,
         OR: [
           {
             nextRetryAt: null,
@@ -322,7 +320,7 @@ export class EdgeCloudPushWorkerService
         domainEvent: true,
       },
       orderBy: {
-        createdAt: 'asc',
+        createdAt: "asc",
       },
       take,
     });
@@ -332,10 +330,7 @@ export class EdgeCloudPushWorkerService
     const domainEvent = outbox.domainEvent;
 
     if (!domainEvent) {
-      await this.markOutboxFailed(
-        outbox.id,
-        'Missing domainEvent relation',
-      );
+      await this.markOutboxFailed(outbox.id, "Missing domainEvent relation");
 
       return {
         pushed: false,
@@ -374,7 +369,7 @@ export class EdgeCloudPushWorkerService
       await this.markOutboxAcked(outbox.id);
 
       this.logger.log(
-        `Edge cloud push acked. outboxId=${outbox.id}, eventType=${event.eventType}, eventId=${event.eventId}, action=${result?.action ?? 'UNKNOWN'}`,
+        `Edge cloud push acked. outboxId=${outbox.id}, eventType=${event.eventType}, eventId=${event.eventId}, action=${result?.action ?? "UNKNOWN"}`,
       );
 
       return {
@@ -417,10 +412,10 @@ export class EdgeCloudPushWorkerService
     const edgeApiKey = this.getEdgeApiKey();
 
     const response = await fetch(`${cloudApiBaseUrl}/sync/edge/push`, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'content-type': 'application/json',
-        'x-edge-api-key': edgeApiKey,
+        "content-type": "application/json",
+        "x-edge-api-key": edgeApiKey,
       },
       body: JSON.stringify({
         events,
@@ -457,7 +452,7 @@ export class EdgeCloudPushWorkerService
       return result.error;
     }
 
-    if (result.action === 'PROCESSING_FAILED') {
+    if (result.action === "PROCESSING_FAILED") {
       return `Cloud processing failed for eventId=${event.eventId}`;
     }
 
@@ -465,7 +460,7 @@ export class EdgeCloudPushWorkerService
       EDGE_TO_CLOUD_EVENT_TYPES.includes(event.eventType) &&
       result.processed === false
     ) {
-      return `Cloud did not process required edge event. eventId=${event.eventId}, action=${result.action ?? 'UNKNOWN'}`;
+      return `Cloud did not process required edge event. eventId=${event.eventId}, action=${result.action ?? "UNKNOWN"}`;
     }
 
     return null;
@@ -489,7 +484,7 @@ export class EdgeCloudPushWorkerService
         id: outboxId,
       },
       data: {
-        status: 'ACKED' as any,
+        status: "ACKED" as any,
         sentAt: new Date(),
         ackedAt: new Date(),
         lastError: null,
@@ -512,7 +507,7 @@ export class EdgeCloudPushWorkerService
         id: outboxId,
       },
       data: {
-        status: 'PENDING' as any,
+        status: "PENDING" as any,
         retryCount,
         nextRetryAt: new Date(Date.now() + retryDelayMs),
         lastError: error.slice(0, 1000),
@@ -521,14 +516,11 @@ export class EdgeCloudPushWorkerService
   }
 
   private shouldRun() {
-    const appMode = (process.env.APP_PROFILE ?? process.env.APP_MODE ?? 'cloud').toLowerCase();
     const enabled =
-      (
-        process.env.EDGE_CLOUD_PUSH_WORKER_ENABLED ??
-        'false'
-      ).toLowerCase() === 'true';
+      (process.env.EDGE_CLOUD_PUSH_WORKER_ENABLED ?? "false").toLowerCase() ===
+      "true";
 
-    return appMode === 'edge' && enabled;
+    return isConnectedEdgeProfile() && enabled;
   }
 
   private getCloudApiBaseUrl() {
@@ -539,11 +531,11 @@ export class EdgeCloudPushWorkerService
 
     if (!value) {
       throw new Error(
-        'CLOUD_API_BASE_URL is required for Edge cloud push worker',
+        "CLOUD_API_BASE_URL is required for Edge cloud push worker",
       );
     }
 
-    return value.replace(/\/+$/, '');
+    return value.replace(/\/+$/, "");
   }
 
   private getEdgeApiKey() {
@@ -554,7 +546,7 @@ export class EdgeCloudPushWorkerService
 
     if (!value) {
       throw new Error(
-        'EDGE_API_KEY or DEV_EDGE_API_KEY is required for Edge cloud push worker',
+        "EDGE_API_KEY or DEV_EDGE_API_KEY is required for Edge cloud push worker",
       );
     }
 
@@ -603,7 +595,7 @@ export class EdgeCloudPushWorkerService
   }
 
   private asRecord(value: unknown): Record<string, unknown> {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
       return {};
     }
 

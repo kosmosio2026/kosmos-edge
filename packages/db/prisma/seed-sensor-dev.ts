@@ -3,16 +3,16 @@ import { PrismaClient } from '../generated/client';
 const prisma = new PrismaClient();
 
 async function main() {
-  const tenant = await prisma.tenant.upsert({
+  const managementCompany = await prisma.managementCompany.upsert({
     where: {
-      code: 'DEFAULT',
+      code: 'KOSMOS',
     },
     update: {
-      name: 'Default Tenant',
+      name: 'Kosmos Parking',
     },
     create: {
-      code: 'DEFAULT',
-      name: 'Default Tenant',
+      code: 'KOSMOS',
+      name: 'Kosmos Parking',
     },
   });
 
@@ -22,13 +22,13 @@ async function main() {
     },
     update: {
       name: 'Development Parking Lot',
-      tenantId: tenant.id,
+      managementCompanyId: managementCompany.id,
       isActive: true,
     },
     create: {
       code: 'LOT-DEV-001',
       name: 'Development Parking Lot',
-      tenantId: tenant.id,
+      managementCompanyId: managementCompany.id,
       isActive: true,
     },
   });

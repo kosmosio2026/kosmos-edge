@@ -35,11 +35,6 @@ export class ParkingLotService {
         region: dto.region ?? null,
         district: dto.district ?? null,
         address: dto.address ?? null,
-        tenant: {
-          connect: {
-            id: user.tenantId!,
-          },
-        },
       },
     });
 

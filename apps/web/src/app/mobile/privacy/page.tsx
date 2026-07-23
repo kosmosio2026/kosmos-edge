@@ -1,5 +1,5 @@
-import { redirect } from 'next/navigation';
+import { MobileLegalPage } from '@/features/mobile/pages/mobile-legal-page';
 
-export default function MobilePrivacyRedirectPage() {
-  redirect('/privacy');
+export default function MobilePrivacyPage() {
+  return <MobileLegalPage kind="privacy" />;
 }

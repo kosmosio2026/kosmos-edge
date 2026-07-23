@@ -2,18 +2,48 @@
 
 import { useEffect, useState } from 'react';
 import { MobileAppShell } from '@/components/mobile/mobile-app-shell';
+import { getPublicApiBaseUrl } from '@/lib/public-config';
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:3000/api';
+const API_BASE_URL = getPublicApiBaseUrl();
+
+const SIZE_CLASS_LABELS: Record<string, string> = {
+  GENERAL: '일반 승용차',
+  COMPACT: '경차',
+  VAN: '승합차',
+  TRUCK: '화물차',
+  MOTORCYCLE: '이륜차',
+  OTHER: '기타',
+};
+
+const POWERTRAIN_LABELS: Record<string, string> = {
+  ICE: '내연기관',
+  HYBRID: '하이브리드',
+  PHEV: '플러그인 하이브리드',
+  EV: '전기차',
+  HYDROGEN: '수소차',
+  OTHER: '기타',
+};
+
+type EligibilityDeclaration = {
+  eligibilityDefinition?: {
+    code?: string;
+    name?: string;
+  };
+};
 
 type VehicleItem = {
-  id: string | null;
-  plateNumber: string;
-  vehicleType?: string | null;
-  ownerName?: string | null;
-  isPrimary?: boolean;
-  isActive?: boolean;
-  createdAt?: string;
+  id: string;
+  isPrimary: boolean;
+  vehicle: {
+    id: string;
+    plateNumber: string;
+    vehicleType?: string | null;
+    sizeClass?: string | null;
+    powertrainType?: string | null;
+    ownerName?: string | null;
+    isActive?: boolean;
+    eligibilityDeclarations?: EligibilityDeclaration[];
+  };
 };
 
 export default function MobileMemberVehiclesPage() {
@@ -27,25 +57,34 @@ export default function MobileMemberVehiclesPage() {
       const token = localStorage.getItem('kosmos.mobileAccessToken');
 
       if (!token) {
-        window.location.href = '/mobile/member/login?next=/mobile/member/vehicles';
+        window.location.href =
+          '/mobile/member/login?next=/mobile/member/vehicles';
         return;
       }
 
       try {
-        const res = await fetch(`${API_BASE_URL}/mobile/member/vehicles`, {
+        const storedUser = localStorage.getItem('kosmos.mobileUser');
+        setUser(storedUser ? JSON.parse(storedUser) : null);
+
+        const res = await fetch(`${API_BASE_URL}/mobile/me/vehicles`, {
           headers: {
             authorization: `Bearer ${token}`,
           },
+          cache: 'no-store',
         });
 
         const data = await res.json();
 
         if (!res.ok) {
-          throw new Error(data?.message ?? '등록 차량을 불러오지 못했습니다.');
+          const errorMessage = Array.isArray(data?.message)
+            ? data.message.join(', ')
+            : data?.message;
+          throw new Error(
+            errorMessage ?? '등록 차량을 불러오지 못했습니다.',
+          );
         }
 
-        setUser(data?.user ?? null);
-        setVehicles(Array.isArray(data?.vehicles) ? data.vehicles : []);
+        setVehicles(Array.isArray(data) ? data : []);
       } catch (error: any) {
         setMessage(error?.message ?? '등록 차량을 불러오지 못했습니다.');
       } finally {
@@ -59,7 +98,7 @@ export default function MobileMemberVehiclesPage() {
   return (
     <MobileAppShell
       title="내 차량"
-      subtitle="회원 차량을 등록하고 대표 차량을 관리하세요."
+      subtitle="회원 차량과 자기신고 할인 자격을 확인하세요."
       sessionType="member"
     >
       <div className="mx-auto max-w-md">
@@ -73,7 +112,8 @@ export default function MobileMemberVehiclesPage() {
                 내 등록 차량
               </h1>
               <p className="mt-2 text-sm text-slate-500">
-                QR 회원 등록 시 아래 차량 중 하나를 선택합니다.
+                실제 할인은 현재 차량과 주차장 할인 프로그램이 일치할 때만
+                적용됩니다.
               </p>
             </div>
 
@@ -92,7 +132,7 @@ export default function MobileMemberVehiclesPage() {
                 {user.name ?? user.phone ?? user.email}
               </p>
               <p className="mt-1 text-xs text-slate-500">
-                {user.email ?? user.phone}
+                {user.email ?? user.phone ?? ''}
               </p>
             </div>
           ) : null}
@@ -122,32 +162,68 @@ export default function MobileMemberVehiclesPage() {
 
           {!loading && vehicles.length > 0 ? (
             <div className="mt-5 space-y-3">
-              {vehicles.map((vehicle) => (
-                <div
-                  key={vehicle.id ?? vehicle.plateNumber}
-                  className="rounded-3xl border border-slate-100 bg-slate-50 p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xl font-black tracking-tight text-slate-950">
-                        {vehicle.plateNumber}
-                      </p>
-                      <p className="mt-1 text-xs font-bold text-slate-400">
-                        {vehicle.vehicleType ?? '차종 미입력'}
-                        {vehicle.ownerName ? ` · ${vehicle.ownerName}` : ''}
-                      </p>
+              {vehicles.map((item) => {
+                const vehicle = item.vehicle;
+                const eligibilityNames =
+                  vehicle.eligibilityDeclarations
+                    ?.map(
+                      (entry) =>
+                        entry.eligibilityDefinition?.name ??
+                        entry.eligibilityDefinition?.code,
+                    )
+                    .filter(Boolean) ?? [];
+
+                return (
+                  <div
+                    key={item.id}
+                    className="rounded-3xl border border-slate-100 bg-slate-50 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xl font-black tracking-tight text-slate-950">
+                          {vehicle.plateNumber}
+                        </p>
+                        <p className="mt-1 text-xs font-bold text-slate-500">
+                          {SIZE_CLASS_LABELS[vehicle.sizeClass ?? ''] ??
+                            vehicle.sizeClass ??
+                            vehicle.vehicleType ??
+                            '차량 분류 미입력'}
+                          {' · '}
+                          {POWERTRAIN_LABELS[vehicle.powertrainType ?? ''] ??
+                            vehicle.powertrainType ??
+                            '동력원 미입력'}
+                        </p>
+                      </div>
+
+                      {item.isPrimary ? (
+                        <span className="rounded-full bg-blue-600 px-3 py-1 text-xs font-black text-white">
+                          대표
+                        </span>
+                      ) : null}
                     </div>
 
-                    {vehicle.isPrimary ? (
-                      <span className="rounded-full bg-blue-600 px-3 py-1 text-xs font-black text-white">
-                        대표
-                      </span>
+                    {eligibilityNames.length > 0 ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {eligibilityNames.map((name) => (
+                          <span
+                            key={String(name)}
+                            className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700"
+                          >
+                            {name}
+                          </span>
+                        ))}
+                      </div>
                     ) : null}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : null}
+
+          <div className="mt-5 rounded-3xl bg-slate-50 p-4 text-xs leading-5 text-slate-500">
+            현재 자격 정보는 회원이 선택한 자기신고 내용입니다. 국가망 또는
+            공공 API 검증은 사용하지 않습니다.
+          </div>
 
           <div className="mt-6 grid gap-3">
             <a

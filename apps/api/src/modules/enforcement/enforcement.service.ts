@@ -3,12 +3,14 @@ import { Prisma, SessionStatus } from '@parking/db';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RealtimePublisherService } from '../realtime/realtime-publisher.service';
 import { WsEvents } from '@parking/shared';
+import { ParkingFeeCalculatorService } from '../billing/parking-fee-calculator.service';
 
 @Injectable()
 export class EnforcementService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtimePublisher: RealtimePublisherService,
+    private readonly feeCalculator: ParkingFeeCalculatorService,
   ) {}
 
   async listViolations() {
@@ -104,7 +106,7 @@ export class EnforcementService {
       ok: true,
       threshold,
       count: sessions.length,
-      items: sessions.map((session) => {
+      items: await Promise.all(sessions.map(async (session) => {
         const metadata =
           session.metadata && typeof session.metadata === 'object'
             ? (session.metadata as Record<string, unknown>)
@@ -114,6 +116,9 @@ export class EnforcementService {
         const elapsedMinutes = entryTime
           ? Math.floor((Date.now() - new Date(entryTime).getTime()) / 60000)
           : null;
+
+        const feeSummary = await this.feeCalculator.summarize(session);
+        const expectedFee = feeSummary.expectedFee;
 
         return {
           id: session.id,
@@ -133,6 +138,13 @@ export class EnforcementService {
             (metadata.contact as string | undefined) ??
             null,
           amount: session.amount,
+          accruedFeeAmount: expectedFee,
+          expectedFee,
+          estimatedFee: expectedFee,
+          currentFee: expectedFee,
+          feePolicyId: feeSummary.feePolicyId,
+          feePolicyName: feeSummary.feePolicyName,
+          feePolicySource: feeSummary.feePolicySource,
           paidAmount: session.paidAmount,
           unpaidAmount: session.unpaidAmount,
           unpaidFee:
@@ -170,7 +182,7 @@ export class EnforcementService {
           enforcementStatus: metadata.enforcementStatus ?? 'UNREGISTERED_OVERSTAY',
           violationReason: 'UNREGISTERED_OVER_10_MINUTES',
         };
-      }),
+      })),
     };
   }
 

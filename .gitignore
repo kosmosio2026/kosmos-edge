@@ -118,3 +118,119 @@ edge/sensor-daemon/.env.*
 **/*.tmp
 **/*.tmp.*
 # END KOSMOS LOCAL RUNTIME ARTIFACTS
+
+# BEGIN KOSMOS SOURCE CONTROL HYGIENE
+
+# Node / package manager
+node_modules/
+.pnpm-store/
+
+# TypeScript and test output
+*.tsbuildinfo
+**/coverage/
+
+# NestJS output
+apps/api/dist/
+
+# Next.js output
+apps/web/.next/
+apps/web/.next-*/
+apps/web/out/
+
+# Package build output
+packages/*/dist/
+
+# Android local caches and build output
+apps/android/.gradle/
+apps/android/**/build/
+apps/android/local.properties
+apps/android/.idea/
+apps/android/**/*.iml
+
+# Android release artifacts and signing files
+*.apk
+*.aab
+*.apks
+*.jks
+*.keystore
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Runtime logs
+*.log
+build-*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# BEGIN/END block intentionally keeps source files tracked
+# END KOSMOS SOURCE CONTROL HYGIENE
+
+# Runtime-generated root directories
+/dist/
+/uploads/
+
+# BEGIN KOSMOS RUST AND CLOUD ARTIFACTS
+
+# Rust build output
+edge/**/target/
+target/
+
+# Cloud service output
+cloud/**/dist/
+cloud/**/build/
+cloud/**/node_modules/
+
+# Prisma generated client is reviewed separately.
+# Do not stage packages/db/generated automatically.
+
+# END KOSMOS RUST AND CLOUD ARTIFACTS
+
+# BEGIN KOSMOS EDGE COMPONENT ARTIFACTS
+
+# Rust build output
+/edge/**/target/
+
+# Node and frontend build output inside Edge components
+/edge/**/node_modules/
+/edge/**/.cache/
+/edge/**/dist/
+/edge/**/build/
+
+# Local environment files
+/edge/**/.env
+/edge/**/.env.*
+!/edge/**/.env.example
+!/edge/**/.env.*.example
+
+# Runtime databases and process files
+/edge/storage/**/*.db
+/edge/storage/**/*.db-*
+/edge/storage/**/*.sqlite
+/edge/storage/**/*.sqlite3
+/edge/storage/**/*.sqlite-*
+/edge/storage/**/*.wal
+/edge/storage/**/*.shm
+/edge/storage/**/*.pid
+/edge/storage/**/*.sock
+/edge/storage/**/*.log
+
+# Compiled objects and libraries outside target
+/edge/**/*.o
+/edge/**/*.a
+/edge/**/*.so
+/edge/**/*.rlib
+/edge/**/*.rmeta
+/edge/**/*.dylib
+/edge/**/*.dll
+/edge/**/*.exe
+
+# END KOSMOS EDGE COMPONENT ARTIFACTS
+
+# Timestamped and named backup files
+**/*.bak-*

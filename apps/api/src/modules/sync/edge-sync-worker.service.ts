@@ -4,6 +4,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
+import { isConnectedEdgeProfile } from '../../common/config/app-mode';
 import { SyncService } from './sync.service';
 
 type CloudPullMessage = {
@@ -62,7 +63,7 @@ export class EdgeSyncWorkerService
       [
         `Edge sync worker init.`,
         `enabled=${enabled}`,
-        `APP_MODE=${process.env.APP_MODE ?? 'undefined'}`,
+        `APP_MODE=${process.env.APP_PROFILE ?? process.env.APP_MODE ?? 'undefined'}`,
         `EDGE_SYNC_WORKER_ENABLED=${
           process.env.EDGE_SYNC_WORKER_ENABLED ?? 'undefined'
         }`,
@@ -105,7 +106,7 @@ export class EdgeSyncWorkerService
       running: this.running,
       intervalMs: this.getIntervalMs(),
       pullLimit: this.getPullLimit(),
-      appMode: process.env.APP_MODE ?? null,
+      appMode: process.env.APP_PROFILE ?? process.env.APP_MODE ?? null,
       edgeNodeId: process.env.EDGE_NODE_ID ?? null,
       cloudApiBaseUrl:
         process.env.CLOUD_API_BASE_URL ??
@@ -366,12 +367,13 @@ export class EdgeSyncWorkerService
   }
 
   private shouldRun() {
-    const appMode = (process.env.APP_MODE ?? 'cloud').toLowerCase();
     const enabled =
-      (process.env.EDGE_SYNC_WORKER_ENABLED ?? 'false').toLowerCase() ===
-      'true';
+      (
+        process.env.EDGE_SYNC_WORKER_ENABLED ??
+        'false'
+      ).toLowerCase() === 'true';
 
-    return appMode === 'edge' && enabled;
+    return isConnectedEdgeProfile() && enabled;
   }
 
   private getCloudApiBaseUrl() {

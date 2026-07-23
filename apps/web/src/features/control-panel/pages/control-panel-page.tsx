@@ -130,22 +130,39 @@ function commandPreview(form: ServiceForm) {
   return `sudo systemctl start|stop|restart ${form.targetName.trim()}`;
 }
 
+const PROTECTED_SERVICE_KEYS = new Set([
+  'edge-api',
+  'edge-web',
+]);
+
+function isProtectedService(service: ServiceStatus) {
+  return PROTECTED_SERVICE_KEYS.has(service.key);
+}
+
 function getAllowedServiceActions(
   service: ServiceStatus,
 ): Array<'start' | 'stop' | 'restart'> {
   const targetName = service.targetName ?? '';
   const key = service.key ?? '';
 
-  if (key === 'api' || targetName === 'kosmos-cloud-api') {
-    return ['restart'];
-  }
-
-  if (key === 'web' || targetName === 'kosmos-edge-web') {
-    return ['restart'];
-  }
-
   if (service.status === 'disabled') {
     return [];
+  }
+
+  if (
+    key === 'api' ||
+    key === 'edge-api' ||
+    targetName.startsWith('kosmos-api@')
+  ) {
+    return ['restart'];
+  }
+
+  if (
+    key === 'web' ||
+    key === 'edge-web' ||
+    targetName.startsWith('kosmos-web@')
+  ) {
+    return ['restart'];
   }
 
   return ['start', 'stop', 'restart'];
@@ -587,7 +604,7 @@ export default function ControlPanelPage({ role = 'admin' }: Props) {
                       설정
                     </button>
 
-                    {service.id ? (
+                    {service.id && !isProtectedService(service) ? (
                       <button
                         type="button"
                         onClick={() => void deleteService(service)}

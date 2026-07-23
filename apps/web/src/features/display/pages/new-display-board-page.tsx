@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { fetchParkingLots } from '@/lib/fetchers';
 import { useAuth } from '@/components/providers/auth-provider';
 import { createDisplayController } from '@/lib/display-api';
+import { apiFetch } from '@/lib/api-client';
 
 type ParkingLot = {
   id: string;
@@ -18,6 +19,8 @@ export default function NewDisplayBoardPage() {
   const { session } = useAuth();
 
   const [lots, setLots] = useState<ParkingLot[]>([]);
+  const [registeredParkingLotIds, setRegisteredParkingLotIds] =
+    useState<Set<string>>(new Set());
   const [region, setRegion] = useState('SEOUL');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -39,14 +42,84 @@ export default function NewDisplayBoardPage() {
   useEffect(() => {
     if (!session?.accessToken) return;
 
-    fetchParkingLots(session.accessToken).then((res) => {
-      const data = res as any;
-      const items = Array.isArray(data)
-        ? data
-        : data?.items ?? data?.data ?? data?.data?.items ?? [];
+    let cancelled = false;
 
-      setLots(items);
-    });
+    Promise.all([
+      fetchParkingLots(session.accessToken),
+      apiFetch<Array<{ parkingLotId: string }>>(
+        '/display/boards',
+      ),
+    ])
+      .then(([lotResponse, boards]) => {
+        if (cancelled) return;
+
+        const data = lotResponse as any;
+        const items: ParkingLot[] = Array.isArray(data)
+          ? data
+          : data?.items ??
+            data?.data ??
+            data?.data?.items ??
+            [];
+
+        const registeredIds = new Set(
+          (boards ?? [])
+            .map((board) => board.parkingLotId)
+            .filter(Boolean),
+        );
+
+        setLots(items);
+        setRegisteredParkingLotIds(registeredIds);
+
+        const requestedParkingLotId =
+          new URLSearchParams(window.location.search).get(
+            'parkingLotId',
+          );
+
+        if (!requestedParkingLotId) return;
+
+        const requestedLot = items.find(
+          (lot) => lot.id === requestedParkingLotId,
+        );
+
+        if (!requestedLot) {
+          setError(
+            '선택한 주차장을 조회할 수 없습니다.',
+          );
+          return;
+        }
+
+        if (registeredIds.has(requestedParkingLotId)) {
+          setError(
+            '선택한 주차장에는 이미 전광판이 등록되어 있습니다.',
+          );
+          return;
+        }
+
+        setRegion(
+          requestedLot.region?.toUpperCase() || 'SEOUL',
+        );
+
+        setForm((prev) => ({
+          ...prev,
+          parkingLotId: requestedParkingLotId,
+          name:
+            prev.name ||
+            `${requestedLot.name} 전광판`,
+        }));
+      })
+      .catch((caught) => {
+        if (cancelled) return;
+
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : '주차장 정보를 불러오지 못했습니다.',
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [session?.accessToken]);
 
   const regions = useMemo(() => {
@@ -58,14 +131,34 @@ export default function NewDisplayBoardPage() {
   }, [lots]);
 
   const filteredLots = useMemo(() => {
-    return lots.filter((lot) => lot.region?.toUpperCase() === region);
-  }, [lots, region]);
+    return lots.filter(
+      (lot) =>
+        lot.region?.toUpperCase() === region &&
+        !registeredParkingLotIds.has(lot.id),
+    );
+  }, [lots, region, registeredParkingLotIds]);
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!session?.accessToken) {
-      setError('Login session is missing.');
+      setError('로그인 세션이 없습니다.');
+      return;
+    }
+
+    if (!form.parkingLotId.trim()) {
+      setError('주차장을 선택해 주세요.');
+      return;
+    }
+
+    if (
+      registeredParkingLotIds.has(
+        form.parkingLotId.trim(),
+      )
+    ) {
+      setError(
+        '선택한 주차장에는 이미 전광판이 등록되어 있습니다.',
+      );
       return;
     }
 
@@ -85,7 +178,11 @@ export default function NewDisplayBoardPage() {
   },
 );
 
-      router.push('/admin/display/boards');
+      router.push(
+        `/admin/display/settings?parkingLotId=${encodeURIComponent(
+          form.parkingLotId.trim(),
+        )}`,
+      );
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add display.');

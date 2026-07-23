@@ -62,6 +62,8 @@ export class UsersService {
         null,
       phone:
         user.phone ??
+        user.operatorProfile?.phone ??
+        user.managerProfile?.phone ??
         user.memberProfile?.phone ??
         user.visitorProfile?.phone ??
         null,

@@ -25,6 +25,7 @@ import { MobileVehicleService } from './mobile-vehicle.service';
 import { MobileStatusService } from './mobile-status.service';
 import { MobileNotificationService } from './mobile-notification.service';
 import { MobileHomeService } from './mobile-home.service';
+import { MobileCouponService } from './mobile-coupon.service';
 
 import { RegisterOccupiedSpaceDto } from './dto/register-occupied-space.dto';
 import { VisitorLoginDto } from './dto/visitor-login.dto';
@@ -38,6 +39,16 @@ import { UpdateMyVehicleDto } from './dto/update-my-vehicle.dto';
 import { UpdateVisitorVehicleDto } from './dto/update-visitor-vehicle.dto';
 import { RegisterPushTokenDto } from './dto/register-push-token.dto';
 import { MobileMapQueryDto } from './dto/mobile-map-query.dto';
+import { MemberSignupDto } from './dto/member-signup.dto';
+import { MemberLoginDto } from './dto/member-login.dto';
+import {
+  ConfirmMemberPasswordResetDto,
+  RequestMemberPasswordResetDto,
+} from './dto/member-password-reset.dto';
+import {
+  ReleaseTenantCouponDto,
+  ReserveTenantCouponDto,
+} from './dto/reserve-tenant-coupon.dto';
 
 @Controller('mobile')
 export class MobileController {
@@ -50,6 +61,7 @@ export class MobileController {
     private readonly mobileStatusService: MobileStatusService,
     private readonly mobileNotificationService: MobileNotificationService,
     private readonly mobileHomeService: MobileHomeService,
+    private readonly mobileCouponService: MobileCouponService,
   ) {}
 
   @Get('map/spaces')
@@ -60,6 +72,27 @@ export class MobileController {
   @Get('map/registerable-occupied-spaces')
   listRegisterableOccupiedSpaces(@Query('parkingLotId') parkingLotId?: string) {
     return this.mobileMapService.listRegisterableOccupiedSpaces(parkingLotId);
+  }
+
+  @Post('member/signup')
+  registerMember(@Body() dto: MemberSignupDto) {
+    return this.mobileAuthService.registerMember(dto);
+  }
+
+  @Post('member/login')
+  loginMember(@Body() dto: MemberLoginDto) {
+    return this.mobileAuthService.loginMember(dto);
+  }
+
+
+  @Post('member/password-reset/request')
+  requestMemberPasswordReset(@Body() dto: RequestMemberPasswordResetDto) {
+    return this.mobileAuthService.requestMemberPasswordReset(dto);
+  }
+
+  @Post('member/password-reset/confirm')
+  confirmMemberPasswordReset(@Body() dto: ConfirmMemberPasswordResetDto) {
+    return this.mobileAuthService.confirmMemberPasswordReset(dto);
   }
 
   @Post('visitor/request-phone-verification')
@@ -206,6 +239,44 @@ export class MobileController {
   @Get('me/vehicles')
   listMyVehicles(@CurrentUser() user: AuthUser) {
     return this.mobileVehicleService.listMyVehicles(user.sub);
+  }
+
+
+  @UseGuards(JwtAuthGuard)
+  @Post('me/coupons/:couponId/reserve')
+  reserveMyCoupon(
+    @CurrentUser() user: AuthUser,
+    @Param('couponId') couponId: string,
+    @Body() dto: ReserveTenantCouponDto,
+  ) {
+    return this.mobileCouponService.reserveMyCoupon(
+      user.sub,
+      couponId,
+      dto.sessionId,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('me/coupons/:couponId/release')
+  releaseMyCoupon(
+    @CurrentUser() user: AuthUser,
+    @Param('couponId') couponId: string,
+    @Body() dto: ReleaseTenantCouponDto,
+  ) {
+    return this.mobileCouponService.releaseMyCoupon(
+      user.sub,
+      couponId,
+      dto.sessionId,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('me/coupons')
+  listMyCoupons(
+    @CurrentUser() user: AuthUser,
+    @Query('parkingLotId') parkingLotId?: string,
+  ) {
+    return this.mobileCouponService.listMyCoupons(user.sub, parkingLotId);
   }
 
   @UseGuards(JwtAuthGuard)

@@ -1,2 +1,4 @@
-import './seed';
-import './displaySeed';
+/**
+ * Backward-compatible core seed runner.
+ */
+import './seed-rbac';

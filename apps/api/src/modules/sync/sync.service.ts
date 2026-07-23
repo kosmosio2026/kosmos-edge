@@ -1,7 +1,9 @@
+import { isCloudProfile } from '../../common/config/app-mode';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { InvoicesService } from '../invoices/invoices.service';
+import { ensureActiveParkingLotQr } from '../../common/parking-lot-qr/parking-lot-qr.helper';
 
 type EdgePushEvent = {
   eventId?: string;
@@ -235,6 +237,13 @@ export class SyncService {
       case 'INVOICE_PARTIALLY_PAID_FROM_CLOUD':
         return this.applyInvoicePaymentFromCloud(edgeNodeId, message);
 
+      case 'MANAGER_LOT_ACCESS_APPROVED_FROM_CLOUD':
+      case 'MANAGER_LOT_ACCESS_REJECTED_FROM_CLOUD':
+        return this.applyManagerLotAccessReviewFromCloud(
+          edgeNodeId,
+          message,
+        );
+
       case 'PARKING_LOT_OPERATION_SNAPSHOT_FROM_CLOUD':
         return this.applyParkingLotOperationSnapshotFromCloud(
           edgeNodeId,
@@ -243,6 +252,18 @@ export class SyncService {
 
       case 'PARKING_LOT_CONFIGURATION_UPDATED_FROM_CLOUD':
         return this.applyParkingLotConfigurationFromCloud(
+          edgeNodeId,
+          message,
+        );
+
+      case 'DISPLAY_BOARD_CONFIGURATION_UPDATED_FROM_CLOUD':
+        return this.applyDisplayBoardConfigurationFromCloud(
+          edgeNodeId,
+          message,
+        );
+
+      case 'DISPLAY_COMMAND_REQUESTED_FROM_CLOUD':
+        return this.applyDisplayCommandFromCloud(
           edgeNodeId,
           message,
         );
@@ -377,6 +398,338 @@ export class SyncService {
       outboxId: cursor,
       eventType,
       payload,
+    };
+  }
+
+  private async applyManagerLotAccessReviewFromCloud(
+    edgeNodeId: string,
+    message: ResolvedCloudMessage,
+  ) {
+    const payload = message.payload;
+
+    const status =
+      message.eventType ===
+      "MANAGER_LOT_ACCESS_APPROVED_FROM_CLOUD"
+        ? "APPROVED"
+        : message.eventType ===
+            "MANAGER_LOT_ACCESS_REJECTED_FROM_CLOUD"
+          ? "REJECTED"
+          : this.stringValue(
+              payload.status,
+            );
+
+    if (
+      status !== "APPROVED" &&
+      status !== "REJECTED"
+    ) {
+      throw new BadRequestException(
+        "Manager lot review sync requires APPROVED or REJECTED status",
+      );
+    }
+
+    const cloudApprovalRequestId =
+      this.stringValue(
+        payload.cloudApprovalRequestId,
+      ) ??
+      this.stringValue(
+        payload.approvalRequestId,
+      );
+
+    const edgeApprovalRequestId =
+      this.stringValue(
+        payload.edgeApprovalRequestId,
+      ) ??
+      cloudApprovalRequestId;
+
+    const requesterId =
+      this.stringValue(
+        payload.requesterId,
+      );
+
+    const parkingLotId =
+      this.stringValue(
+        payload.parkingLotId,
+      );
+
+    const sourceEdgeNodeId =
+      this.stringValue(
+        payload.sourceEdgeNodeId,
+      );
+
+    if (
+      sourceEdgeNodeId &&
+      sourceEdgeNodeId !== edgeNodeId
+    ) {
+      throw new BadRequestException(
+        `Manager lot review is for another Edge: ${sourceEdgeNodeId}`,
+      );
+    }
+
+    if (!edgeApprovalRequestId) {
+      throw new BadRequestException(
+        "Manager lot review sync requires edgeApprovalRequestId",
+      );
+    }
+
+    if (!requesterId) {
+      throw new BadRequestException(
+        "Manager lot review sync requires requesterId",
+      );
+    }
+
+    if (!parkingLotId) {
+      throw new BadRequestException(
+        "Manager lot review sync requires parkingLotId",
+      );
+    }
+
+    let localRequest =
+      await this.prisma
+        .approvalRequest.findUnique({
+          where: {
+            id: edgeApprovalRequestId,
+          },
+        });
+
+    if (!localRequest) {
+      localRequest =
+        await this.prisma
+          .approvalRequest.findFirst({
+            where: {
+              requesterId,
+              requestedParkingLotId:
+                parkingLotId,
+              type: {
+                in: [
+                  "MANAGER_LOT_ACCESS",
+                  "PARKING_LOT_ACCESS",
+                ],
+              },
+            },
+            orderBy: {
+              createdAt: "desc",
+            },
+          });
+    }
+
+    if (!localRequest) {
+      throw new BadRequestException(
+        `Edge approval request not found: ${edgeApprovalRequestId}`,
+      );
+    }
+
+    if (
+      localRequest.requesterId !==
+        requesterId ||
+      localRequest.requestedParkingLotId !==
+        parkingLotId
+    ) {
+      throw new BadRequestException(
+        "Edge approval request does not match requester or parking lot",
+      );
+    }
+
+    const [
+      managerProfile,
+      parkingLot,
+    ] = await Promise.all([
+      this.prisma.managerProfile.findUnique({
+        where: {
+          userId: requesterId,
+        },
+      }),
+      this.prisma.parkingLot.findUnique({
+        where: {
+          id: parkingLotId,
+        },
+      }),
+    ]);
+
+    if (!managerProfile) {
+      throw new BadRequestException(
+        `Edge manager profile not found: ${requesterId}`,
+      );
+    }
+
+    if (!parkingLot) {
+      throw new BadRequestException(
+        `Edge parking lot not found: ${parkingLotId}`,
+      );
+    }
+
+    const reviewedAtRaw =
+      this.stringValue(
+        payload.reviewedAt,
+      );
+
+    const parsedReviewedAt =
+      reviewedAtRaw
+        ? new Date(reviewedAtRaw)
+        : new Date();
+
+    const reviewedAt =
+      Number.isNaN(
+        parsedReviewedAt.getTime(),
+      )
+        ? new Date()
+        : parsedReviewedAt;
+
+    const reviewedById =
+      this.stringValue(
+        payload.reviewedById,
+      );
+
+    const localReviewer =
+      reviewedById
+        ? await this.prisma.user.findUnique({
+            where: {
+              id: reviewedById,
+            },
+            select: {
+              id: true,
+            },
+          })
+        : null;
+
+    const rejectionReason =
+      status === "REJECTED"
+        ? this.stringValue(
+            payload.rejectionReason,
+          )
+        : null;
+
+    const result =
+      await this.prisma.$transaction(
+        async (tx) => {
+          const currentRequestData =
+            this.asRecord(
+              localRequest.requestData,
+            );
+
+          const approvalUpdate:
+            Record<string, unknown> = {
+              status,
+              reviewedAt,
+              rejectionReason,
+              requestData: {
+                ...currentRequestData,
+                cloudApprovalRequestId:
+                  cloudApprovalRequestId ??
+                  null,
+                edgeApprovalRequestId:
+                  localRequest.id,
+                cloudReviewStatus:
+                  status,
+                cloudReviewedById:
+                  reviewedById,
+                cloudReviewedAt:
+                  reviewedAt.toISOString(),
+                cloudRejectionReason:
+                  rejectionReason,
+                cloudToEdgeCursor:
+                  message.cursor,
+                cloudToEdgeOutboxId:
+                  message.outboxId,
+                syncedReviewFromCloud:
+                  true,
+              },
+            };
+
+          if (localReviewer) {
+            approvalUpdate.reviewedById =
+              localReviewer.id;
+          }
+
+          const updatedRequest =
+            await tx.approvalRequest.update({
+              where: {
+                id: localRequest.id,
+              },
+              data:
+                approvalUpdate as any,
+            });
+
+          if (status === "APPROVED") {
+            await tx.managerParkingLot.upsert({
+              where: {
+                managerProfileUserId_parkingLotId:
+                  {
+                    managerProfileUserId:
+                      requesterId,
+                    parkingLotId,
+                  },
+              },
+              update: {},
+              create: {
+                managerProfileUserId:
+                  requesterId,
+                parkingLotId,
+              },
+            });
+
+            const existingScope =
+              await tx.userScopeBinding.findFirst({
+                where: {
+                  userId: requesterId,
+                  scopeType: "LOT" as any,
+                  parkingLotId,
+                },
+                select: {
+                  id: true,
+                },
+              });
+
+            if (!existingScope) {
+              await tx.userScopeBinding.create({
+                data: {
+                  userId: requesterId,
+                  scopeType:
+                    "LOT" as any,
+                  parkingLotId,
+                },
+              });
+            }
+
+            const managerUpdate:
+              Record<string, unknown> = {
+                approvedAt: reviewedAt,
+              };
+
+            if (localReviewer) {
+              managerUpdate.approvedById =
+                localReviewer.id;
+            }
+
+            await tx.managerProfile.update({
+              where: {
+                userId: requesterId,
+              },
+              data:
+                managerUpdate as any,
+            });
+          }
+
+          return updatedRequest;
+        },
+      );
+
+    return {
+      ok: true,
+      applied: true,
+      action:
+        status === "APPROVED"
+          ? "MANAGER_LOT_ACCESS_APPROVAL_APPLIED_FROM_CLOUD"
+          : "MANAGER_LOT_ACCESS_REJECTION_APPLIED_FROM_CLOUD",
+      edgeNodeId,
+      cursor: message.cursor,
+      outboxId: message.outboxId,
+      eventType: message.eventType,
+      approvalRequestId:
+        result.id,
+      cloudApprovalRequestId,
+      requesterId,
+      parkingLotId,
+      status,
     };
   }
 
@@ -1848,6 +2201,48 @@ export class SyncService {
     const invoicePaidAmount = this.numberValue(payload.invoicePaidAmount);
     const invoiceUnpaidAmount = this.numberValue(payload.invoiceUnpaidAmount);
 
+    /*
+     * Cloud 공식 Invoice를 legacy invoiceId에 적용하기 전에
+     * Edge 로컬 Invoice namespace를 별도로 보존한다.
+     */
+    const edgeInvoiceId =
+      this.stringValue(payload.edgeInvoiceId) ??
+      metadata.edgeInvoiceId ??
+      session.primaryInvoiceId ??
+      null;
+
+    const edgeInvoiceNo =
+      this.stringValue(payload.edgeInvoiceNo) ??
+      metadata.edgeInvoiceNo ??
+      null;
+
+    const edgeInvoiceStatus =
+      this.stringValue(payload.edgeInvoiceStatus) ??
+      metadata.edgeInvoiceStatus ??
+      metadata.invoiceStatus ??
+      null;
+
+    const edgeInvoiceAmount =
+      this.numberValue(payload.edgeInvoiceAmount) ??
+      metadata.edgeInvoiceAmount ??
+      metadata.invoiceAmount ??
+      session.amount ??
+      null;
+
+    const edgeInvoicePaidAmount =
+      this.numberValue(payload.edgeInvoicePaidAmount) ??
+      metadata.edgeInvoicePaidAmount ??
+      metadata.invoicePaidAmount ??
+      session.paidAmount ??
+      null;
+
+    const edgeInvoiceUnpaidAmount =
+      this.numberValue(payload.edgeInvoiceUnpaidAmount) ??
+      metadata.edgeInvoiceUnpaidAmount ??
+      metadata.invoiceUnpaidAmount ??
+      session.unpaidAmount ??
+      null;
+
     const paymentStatus =
       this.stringValue(payload.paymentStatus) ??
       this.resolvePaymentStatusFromInvoice({
@@ -1866,6 +2261,17 @@ export class SyncService {
           ...metadata,
           cloudInvoiceSyncedAt: new Date().toISOString(),
           cloudInvoiceSyncEventType: message.eventType,
+
+          /*
+           * Edge에서 먼저 생성된 로컬 Invoice.
+           * Cloud 공식 Invoice와 별도 namespace로 유지한다.
+           */
+          edgeInvoiceId,
+          edgeInvoiceNo,
+          edgeInvoiceStatus,
+          edgeInvoiceAmount,
+          edgeInvoicePaidAmount,
+          edgeInvoiceUnpaidAmount,
 
           /*
            * Cloud가 발급한 공식 결제·수금 Invoice.
@@ -1921,7 +2327,7 @@ export class SyncService {
           paymentStatus,
           paymentRequired: (invoiceUnpaidAmount ?? 0) > 0,
           invoiceCreatedAtEdge:
-            Boolean(metadata.edgeInvoiceId) ||
+            Boolean(edgeInvoiceId) ||
             metadata.invoiceCreatedAtEdge === true,
           invoiceSyncRequired: false,
           cloudSessionId:
@@ -2234,6 +2640,24 @@ export class SyncService {
         Record<string, any>;
 
       switch (input.event.eventType) {
+        case 'MANAGER_LOT_ACCESS_REQUESTED_EDGE_SYNC_REQUIRED':
+          result =
+            await this.applyEdgeManagerLotAccessRequest({
+              edgeNodeId: input.edgeNodeId,
+              event: input.event,
+              payload: input.payload,
+            });
+          break;
+
+        case 'PARKING_LOT_CREATED_EDGE_SYNC_REQUIRED':
+          result =
+            await this.applyEdgeParkingLotCreated({
+              edgeNodeId: input.edgeNodeId,
+              event: input.event,
+              payload: input.payload,
+            });
+          break;
+
         case 'PARKING_SESSION_EXITED_UNPAID_EDGE_SYNC_REQUIRED':
           result =
             await this
@@ -2247,7 +2671,6 @@ export class SyncService {
           break;
 
         case 'PARKING_SESSION_ENTERED_FROM_EDGE':
-        case 'PARKING_SESSION_EXITED_FROM_EDGE':
           result =
             await this
               .applyEdgeParkingSessionEvent({
@@ -2259,6 +2682,101 @@ export class SyncService {
               });
           break;
 
+        case 'PARKING_SESSION_EXITED_FROM_EDGE': {
+          const sessionResult =
+            await this
+              .applyEdgeParkingSessionEvent({
+                edgeNodeId:
+                  input.edgeNodeId,
+                event: input.event,
+                payload:
+                  input.payload,
+              });
+
+          const edgeInvoice =
+            this.asRecord(
+              input.payload.edgeInvoice,
+            );
+
+          const reportedInvoiceStatus =
+            this.stringValue(
+              edgeInvoice.status,
+            ) ??
+            this.stringValue(
+              input.payload.invoiceStatus,
+            );
+
+          const reportedInvoicePaidAmount =
+            this.numberValue(
+              edgeInvoice.paidAmount,
+            ) ??
+            this.numberValue(
+              input.payload.paidAmount,
+            ) ??
+            0;
+
+          const reportedInvoiceUnpaidAmount =
+            this.numberValue(
+              edgeInvoice.unpaidAmount,
+            ) ??
+            this.numberValue(
+              input.payload.unpaidAmount,
+            );
+
+          const isPaidEdgeInvoice =
+            reportedInvoiceStatus === 'PAID' ||
+            (
+              reportedInvoicePaidAmount > 0 &&
+              reportedInvoiceUnpaidAmount !== null &&
+              reportedInvoiceUnpaidAmount <= 0
+            );
+
+          if (
+            sessionResult.action !==
+              'EDGE_SESSION_STALE_EVENT_IGNORED' &&
+            isPaidEdgeInvoice
+          ) {
+            const cloudSessionId =
+              this.stringValue(
+                sessionResult.sessionId,
+              ) ??
+              this.stringValue(
+                input.payload.sessionId,
+              );
+
+            if (!cloudSessionId) {
+              throw new BadRequestException(
+                'Cannot resolve Cloud session for paid Edge exit',
+              );
+            }
+
+            const paidInvoiceResult =
+              await this
+                .createCloudInvoiceForEdgePaidExit({
+                  edgeNodeId:
+                    input.edgeNodeId,
+                  event:
+                    input.event,
+                  payload:
+                    input.payload,
+                  cloudSessionId,
+                });
+
+            result = {
+              ...sessionResult,
+              action:
+                'EDGE_PARKING_SESSION_EXITED_PAID_INVOICE_APPLIED',
+              invoice:
+                paidInvoiceResult.invoice,
+            };
+          } else {
+            result =
+              sessionResult;
+          }
+
+          break;
+        }
+
         case 'SENSOR_TELEMETRY_REPORTED_FROM_EDGE':
         case 'PARKING_SPACE_STATUS_CHANGED_FROM_EDGE':
           result =
@@ -2267,6 +2785,19 @@ export class SyncService {
                 edgeNodeId:
                   input.edgeNodeId,
                 event: input.event,
+                payload:
+                  input.payload,
+              });
+          break;
+
+        case 'DISPLAY_COMMAND_RESULT_FROM_EDGE':
+          result =
+            await this
+              .applyEdgeDisplayCommandResult({
+                edgeNodeId:
+                  input.edgeNodeId,
+                event:
+                  input.event,
                 payload:
                   input.payload,
               });
@@ -2323,6 +2854,681 @@ export class SyncService {
         error: message,
       };
     }
+  }
+
+  private async applyEdgeManagerLotAccessRequest(
+    input: {
+      edgeNodeId: string;
+      event: EdgePushEvent;
+      payload: Record<string, unknown>;
+    },
+  ) {
+    const approvalRequestId =
+      this.stringValue(
+        input.payload.approvalRequestId,
+      ) ??
+      this.stringValue(
+        input.event.aggregateId,
+      );
+
+    const requesterId =
+      this.stringValue(
+        input.payload.requesterId,
+      );
+
+    const parkingLotId =
+      this.stringValue(
+        input.payload.parkingLotId,
+      ) ??
+      this.stringValue(
+        input.payload.requestedParkingLotId,
+      );
+
+    if (!approvalRequestId) {
+      throw new BadRequestException(
+        'Manager lot access sync requires approvalRequestId',
+      );
+    }
+
+    if (!requesterId) {
+      throw new BadRequestException(
+        'Manager lot access sync requires requesterId',
+      );
+    }
+
+    if (!parkingLotId) {
+      throw new BadRequestException(
+        'Manager lot access sync requires parkingLotId',
+      );
+    }
+
+    const [
+      parkingLot,
+      managerProfile,
+      edgeParkingLot,
+      approved,
+      existingById,
+    ] = await Promise.all([
+      this.prisma.parkingLot.findUnique({
+        where: {
+          id: parkingLotId,
+        },
+      }),
+      this.prisma.managerProfile.findUnique({
+        where: {
+          userId: requesterId,
+        },
+      }),
+      this.prisma.edgeParkingLot.findUnique({
+        where: {
+          edgeNodeId_parkingLotId: {
+            edgeNodeId:
+              input.edgeNodeId,
+            parkingLotId,
+          },
+        },
+      }),
+      this.prisma.managerParkingLot.findUnique({
+        where: {
+          managerProfileUserId_parkingLotId:
+            {
+              managerProfileUserId:
+                requesterId,
+              parkingLotId,
+            },
+        },
+      }),
+      this.prisma.approvalRequest.findUnique({
+        where: {
+          id: approvalRequestId,
+        },
+      }),
+    ]);
+
+    if (!parkingLot) {
+      throw new BadRequestException(
+        `Cloud parking lot not found: ${parkingLotId}`,
+      );
+    }
+
+    if (!managerProfile) {
+      throw new BadRequestException(
+        `Cloud manager profile not found: ${requesterId}`,
+      );
+    }
+
+    if (!edgeParkingLot) {
+      throw new BadRequestException(
+        `Edge node ${input.edgeNodeId} is not assigned to parking lot ${parkingLotId}`,
+      );
+    }
+
+    if (approved) {
+      return {
+        action:
+          'MANAGER_LOT_ACCESS_ALREADY_APPROVED',
+        approvalRequestId,
+        requesterId,
+        parkingLotId,
+        invoice: null,
+      };
+    }
+
+    if (existingById) {
+      if (
+        existingById.requesterId !==
+          requesterId ||
+        existingById
+          .requestedParkingLotId !==
+          parkingLotId
+      ) {
+        throw new BadRequestException(
+          `Approval request id conflict: ${approvalRequestId}`,
+        );
+      }
+
+      return {
+        action:
+          existingById.status ===
+          'PENDING'
+            ? 'MANAGER_LOT_ACCESS_REQUEST_ALREADY_PENDING'
+            : `MANAGER_LOT_ACCESS_REQUEST_ALREADY_${existingById.status}`,
+        approvalRequestId:
+          existingById.id,
+        requesterId,
+        parkingLotId,
+        invoice: null,
+      };
+    }
+
+    const duplicatePending =
+      await this.prisma
+        .approvalRequest.findFirst({
+          where: {
+            requesterId,
+            requestedParkingLotId:
+              parkingLotId,
+            type: {
+              in: [
+                'MANAGER_LOT_ACCESS',
+                'PARKING_LOT_ACCESS',
+              ],
+            },
+            status: 'PENDING',
+          },
+        });
+
+    if (duplicatePending) {
+      const previousRequestData =
+        this.asRecord(
+          duplicatePending.requestData,
+        );
+
+      await this.prisma
+        .approvalRequest.update({
+          where: {
+            id: duplicatePending.id,
+          },
+          data: {
+            requestData: {
+              ...previousRequestData,
+              edgeApprovalRequestId:
+                approvalRequestId,
+              sourceEdgeNodeId:
+                input.edgeNodeId,
+              syncedFromEdge: true,
+              syncedAt:
+                new Date().toISOString(),
+            } as any,
+          },
+        });
+
+      return {
+        action:
+          'MANAGER_LOT_ACCESS_REQUEST_ALREADY_PENDING',
+        approvalRequestId:
+          duplicatePending.id,
+        edgeApprovalRequestId:
+          approvalRequestId,
+        requesterId,
+        parkingLotId,
+        invoice: null,
+      };
+    }
+
+    const memo =
+      this.stringValue(
+        input.payload.memo,
+      );
+
+    const item =
+      await this.prisma
+        .approvalRequest.create({
+          data: {
+            id: approvalRequestId,
+            requesterId,
+            managementCompanyId:
+              parkingLot
+                .managementCompanyId ??
+              null,
+            type:
+              'MANAGER_LOT_ACCESS',
+            status: 'PENDING',
+            requestedParkingLotId:
+              parkingLot.id,
+            requestedParkingLotName:
+              parkingLot.name,
+            memo,
+            requestData: {
+              source: 'EDGE',
+              sourceEdgeNodeId:
+                input.edgeNodeId,
+              edgeApprovalRequestId:
+                approvalRequestId,
+              requestedAt:
+                this.stringValue(
+                  input.payload.requestedAt,
+                ) ?? null,
+              syncedFromEdge: true,
+              syncedAt:
+                new Date().toISOString(),
+            } as any,
+          },
+        });
+
+    return {
+      action:
+        'MANAGER_LOT_ACCESS_REQUEST_CREATED_ON_CLOUD',
+      approvalRequestId: item.id,
+      requesterId,
+      parkingLotId,
+      invoice: null,
+    };
+  }
+
+  private async applyEdgeParkingLotCreated(input: {
+    edgeNodeId: string;
+    event: EdgePushEvent;
+    payload: Record<string, unknown>;
+  }) {
+    const nestedParkingLot = this.asRecord(input.payload.parkingLot);
+
+    const payload =
+      Object.keys(nestedParkingLot).length > 0
+        ? nestedParkingLot
+        : input.payload;
+
+    const parkingLotId =
+      this.stringValue(payload.id) ??
+      this.stringValue(payload.parkingLotId) ??
+      this.stringValue(input.event.aggregateId);
+
+    const code = this.stringValue(payload.code);
+    const name = this.stringValue(payload.name);
+    const address = this.stringValue(payload.address);
+
+    if (!parkingLotId) {
+      throw new BadRequestException(
+        "Edge parking lot creation requires parkingLot.id",
+      );
+    }
+
+    if (!code) {
+      throw new BadRequestException("Edge parking lot creation requires code");
+    }
+
+    if (!name) {
+      throw new BadRequestException("Edge parking lot creation requires name");
+    }
+
+    if (!address) {
+      throw new BadRequestException(
+        "Edge parking lot creation requires address",
+      );
+    }
+
+    const operationMode =
+      payload.operationMode === "MANUAL"
+        ? "MANUAL"
+        : payload.operationMode === "SENSOR"
+          ? "SENSOR"
+          : null;
+
+    if (!operationMode) {
+      throw new BadRequestException(
+        "Edge parking lot creation requires operationMode SENSOR or MANUAL",
+      );
+    }
+
+    const requestedManagementCompanyId =
+      this.stringValue(
+        payload.managementCompanyId,
+      );
+
+    const createdByUserId =
+      this.stringValue(
+        input.payload.createdByUserId,
+      );
+
+    let managementCompanyId:
+      string | null = null;
+
+    if (requestedManagementCompanyId) {
+      const requestedCompany =
+        await this.prisma
+          .managementCompany.findUnique({
+            where: {
+              id:
+                requestedManagementCompanyId,
+            },
+            select: {
+              id: true,
+            },
+          });
+
+      managementCompanyId =
+        requestedCompany?.id ?? null;
+    }
+
+    /*
+     * Edge에서 전달한 관리회사 ID가 없거나
+     * Cloud에 존재하지 않을 경우 등록자 계정으로
+     * 한 번 더 관리회사를 해석한다.
+     */
+    if (
+      !managementCompanyId &&
+      createdByUserId
+    ) {
+      const [
+        creatorUser,
+        creatorManagerProfile,
+      ] = await Promise.all([
+        this.prisma.user.findUnique({
+          where: {
+            id: createdByUserId,
+          },
+          select: {
+            managementCompanyId: true,
+          },
+        }),
+        this.prisma.managerProfile.findUnique({
+          where: {
+            userId: createdByUserId,
+          },
+          select: {
+            managementCompanyId: true,
+          },
+        }),
+      ]);
+
+      managementCompanyId =
+        creatorManagerProfile
+          ?.managementCompanyId ??
+        creatorUser?.managementCompanyId ??
+        null;
+    }
+
+    const [existingById, existingByCode] = await Promise.all([
+      this.prisma.parkingLot.findUnique({
+        where: {
+          id: parkingLotId,
+        },
+      }),
+      this.prisma.parkingLot.findUnique({
+        where: {
+          code,
+        },
+      }),
+    ]);
+
+    if (
+      existingById &&
+      existingByCode &&
+      existingById.id !== existingByCode.id
+    ) {
+      throw new BadRequestException(
+        `Parking lot id/code conflict: id=${parkingLotId}, code=${code}`,
+      );
+    }
+
+    if (existingByCode && existingByCode.id !== parkingLotId) {
+      throw new BadRequestException(
+        `Parking lot code already belongs to another id: ${code}`,
+      );
+    }
+
+    const sectionPayloads = Array.isArray(input.payload.sections)
+      ? input.payload.sections.map((item) => this.asRecord(item))
+      : [];
+
+    const spacePayloads = Array.isArray(input.payload.spaces)
+      ? input.payload.spaces.map((item) => this.asRecord(item))
+      : [];
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const lotData = {
+        code,
+        name,
+        region: this.stringValue(payload.region),
+        district: this.stringValue(payload.district),
+        address,
+        timezone: this.stringValue(payload.timezone) ?? "Asia/Seoul",
+        lat: this.numberValue(payload.lat),
+        lng: this.numberValue(payload.lng),
+        centerLat:
+          this.numberValue(payload.centerLat) ?? this.numberValue(payload.lat),
+        centerLng:
+          this.numberValue(payload.centerLng) ?? this.numberValue(payload.lng),
+        representative: this.stringValue(payload.representative),
+        contact: this.stringValue(payload.contact),
+        managementCompanyId,
+        graceMinutes: this.numberValue(payload.graceMinutes) ?? 10,
+        operationMode,
+        isActive:
+          typeof payload.isActive === "boolean" ? payload.isActive : true,
+      };
+
+      const existingLot = existingById ?? existingByCode;
+
+      const parkingLot = existingLot
+        ? await tx.parkingLot.update({
+            where: {
+              id: existingLot.id,
+            },
+            data: lotData,
+          })
+        : await tx.parkingLot.create({
+            data: {
+              id: parkingLotId,
+              ...lotData,
+            },
+          });
+
+      await ensureActiveParkingLotQr(tx, parkingLot);
+
+      await tx.edgeParkingLot.upsert({
+        where: {
+          edgeNodeId_parkingLotId: {
+            edgeNodeId: input.edgeNodeId,
+            parkingLotId: parkingLot.id,
+          },
+        },
+        update: {},
+        create: {
+          edgeNodeId: input.edgeNodeId,
+          parkingLotId: parkingLot.id,
+          isPrimary: false,
+        },
+      });
+
+      let sectionCount = 0;
+      let spaceCount = 0;
+
+      for (const sectionPayload of sectionPayloads) {
+        const sectionId = this.stringValue(sectionPayload.id);
+
+        const sectionCode = this.stringValue(sectionPayload.code);
+
+        const sectionName = this.stringValue(sectionPayload.name);
+
+        if (!sectionId || !sectionName) {
+          throw new BadRequestException(
+            "Edge parking section requires id and name",
+          );
+        }
+
+        const [existingSectionById, existingSectionByCode] = await Promise.all([
+          tx.parkingSection.findUnique({
+            where: {
+              id: sectionId,
+            },
+          }),
+          sectionCode
+            ? tx.parkingSection.findUnique({
+                where: {
+                  parkingLotId_code: {
+                    parkingLotId: parkingLot.id,
+                    code: sectionCode,
+                  },
+                },
+              })
+            : Promise.resolve(null),
+        ]);
+
+        if (
+          existingSectionById &&
+          existingSectionById.parkingLotId !== parkingLot.id
+        ) {
+          throw new BadRequestException(
+            `Parking section belongs to another lot: ${sectionId}`,
+          );
+        }
+
+        if (existingSectionByCode && existingSectionByCode.id !== sectionId) {
+          throw new BadRequestException(
+            `Parking section code conflict: ${sectionCode}`,
+          );
+        }
+
+        const sectionData = {
+          parkingLotId: parkingLot.id,
+          name: sectionName,
+          code: sectionCode,
+          centerLat: this.numberValue(sectionPayload.centerLat),
+          centerLng: this.numberValue(sectionPayload.centerLng),
+          polygonJson: sectionPayload.polygonJson ?? undefined,
+          isActive:
+            typeof sectionPayload.isActive === "boolean"
+              ? sectionPayload.isActive
+              : true,
+        };
+
+        if (existingSectionById || existingSectionByCode) {
+          const target = existingSectionById ?? existingSectionByCode;
+
+          await tx.parkingSection.update({
+            where: {
+              id: target!.id,
+            },
+            data: sectionData as any,
+          });
+        } else {
+          await tx.parkingSection.create({
+            data: {
+              id: sectionId,
+              ...sectionData,
+            } as any,
+          });
+        }
+
+        sectionCount += 1;
+      }
+
+      for (const spacePayload of spacePayloads) {
+        const spaceId = this.stringValue(spacePayload.id);
+
+        const sectionId = this.stringValue(spacePayload.sectionId);
+
+        const spaceCode = this.stringValue(spacePayload.code);
+
+        if (!spaceId || !sectionId || !spaceCode) {
+          throw new BadRequestException(
+            "Edge parking space requires id, sectionId and code",
+          );
+        }
+
+        const section = await tx.parkingSection.findUnique({
+          where: {
+            id: sectionId,
+          },
+        });
+
+        if (!section || section.parkingLotId !== parkingLot.id) {
+          throw new BadRequestException(
+            `Parking section not found for space: ${sectionId}`,
+          );
+        }
+
+        const [existingSpaceById, existingSpaceByCode] = await Promise.all([
+          tx.parkingSpace.findUnique({
+            where: {
+              id: spaceId,
+            },
+          }),
+          tx.parkingSpace.findUnique({
+            where: {
+              sectionId_code: {
+                sectionId,
+                code: spaceCode,
+              },
+            },
+          }),
+        ]);
+
+        if (existingSpaceById && existingSpaceById.sectionId !== sectionId) {
+          throw new BadRequestException(
+            `Parking space belongs to another section: ${spaceId}`,
+          );
+        }
+
+        if (existingSpaceByCode && existingSpaceByCode.id !== spaceId) {
+          throw new BadRequestException(
+            `Parking space code conflict: ${spaceCode}`,
+          );
+        }
+
+        const spaceType =
+          this.stringValue(spacePayload.type) ??
+          this.stringValue(spacePayload.spaceType) ??
+          "REGULAR";
+
+        const spaceStatus =
+          this.stringValue(spacePayload.status) ??
+          this.stringValue(spacePayload.spaceStatus) ??
+          "EMPTY";
+
+        const spaceData = {
+          sectionId,
+          code: spaceCode,
+          number:
+            this.stringValue(spacePayload.number) ??
+            this.stringValue(spacePayload.spaceNumber),
+          type: spaceType,
+          status: spaceStatus,
+          lat: this.numberValue(spacePayload.lat),
+          lng: this.numberValue(spacePayload.lng),
+          widthMeter: this.numberValue(spacePayload.widthMeter),
+          heightMeter: this.numberValue(spacePayload.heightMeter),
+          rotationDeg: this.numberValue(spacePayload.rotationDeg),
+          posX: this.numberValue(spacePayload.posX),
+          posY: this.numberValue(spacePayload.posY),
+          polygonJson: spacePayload.polygonJson ?? undefined,
+          isActive:
+            typeof spacePayload.isActive === "boolean"
+              ? spacePayload.isActive
+              : false,
+        };
+
+        if (existingSpaceById || existingSpaceByCode) {
+          const target = existingSpaceById ?? existingSpaceByCode;
+
+          await tx.parkingSpace.update({
+            where: {
+              id: target!.id,
+            },
+            data: spaceData as any,
+          });
+        } else {
+          await tx.parkingSpace.create({
+            data: {
+              id: spaceId,
+              ...spaceData,
+            } as any,
+          });
+        }
+
+        spaceCount += 1;
+      }
+
+      return {
+        parkingLot,
+        sectionCount,
+        spaceCount,
+        wasCreated: !existingLot,
+      };
+    });
+
+    return {
+      action: result.wasCreated
+        ? "EDGE_PARKING_LOT_CREATED_ON_CLOUD"
+        : "EDGE_PARKING_LOT_UPDATED_ON_CLOUD",
+      parkingLotId: result.parkingLot.id,
+      code: result.parkingLot.code,
+      edgeNodeId: input.edgeNodeId,
+      sectionCount: result.sectionCount,
+      spaceCount: result.spaceCount,
+      invoice: null,
+    };
   }
 
   private async applyEdgeParkingSessionEvent(input: {
@@ -3285,6 +4491,1599 @@ export class SyncService {
     };
   }
 
+  private async applyDisplayBoardConfigurationFromCloud(
+    edgeNodeId: string,
+    message: ResolvedCloudMessage,
+  ) {
+    const payload =
+      message.payload;
+
+    const boardPayload =
+      this.asRecord(
+        payload.board,
+      );
+
+    const displayBoardId =
+      this.stringValue(
+        payload.displayBoardId,
+      ) ??
+      this.stringValue(
+        boardPayload.id,
+      );
+
+    const parkingLotId =
+      this.stringValue(
+        payload.parkingLotId,
+      ) ??
+      this.stringValue(
+        boardPayload.parkingLotId,
+      );
+
+    const code =
+      this.stringValue(
+        boardPayload.code,
+      );
+
+    const name =
+      this.stringValue(
+        boardPayload.name,
+      );
+
+    if (
+      !displayBoardId ||
+      !parkingLotId ||
+      !code ||
+      !name
+    ) {
+      throw new BadRequestException(
+        'Display configuration requires displayBoardId, parkingLotId, code and name',
+      );
+    }
+
+    const parkingLot =
+      await this.prisma.parkingLot.findUnique({
+        where: {
+          id:
+            parkingLotId,
+        },
+        select: {
+          id: true,
+        },
+      });
+
+    if (!parkingLot) {
+      throw new BadRequestException(
+        `Edge parking lot not found: ${parkingLotId}`,
+      );
+    }
+
+    const lines =
+      Array.isArray(
+        payload.lines,
+      )
+        ? payload.lines.filter(
+            (
+              value,
+            ): value is Record<
+              string,
+              unknown
+            > =>
+              Boolean(
+                value &&
+                typeof value ===
+                  'object' &&
+                !Array.isArray(
+                  value,
+                ),
+              ),
+          )
+        : [];
+
+    const modules =
+      Array.isArray(
+        payload.modules,
+      )
+        ? payload.modules.filter(
+            (
+              value,
+            ): value is Record<
+              string,
+              unknown
+            > =>
+              Boolean(
+                value &&
+                typeof value ===
+                  'object' &&
+                !Array.isArray(
+                  value,
+                ),
+              ),
+          )
+        : [];
+
+    const sectionIds =
+      Array.from(
+        new Set(
+          modules
+            .map(
+              (module) =>
+                this.stringValue(
+                  module.parkingSectionId,
+                ),
+            )
+            .filter(
+              (
+                value,
+              ): value is string =>
+                Boolean(value),
+            ),
+        ),
+      );
+
+    const existingSections =
+      sectionIds.length > 0
+        ? await this.prisma.parkingSection
+            .findMany({
+              where: {
+                id: {
+                  in:
+                    sectionIds,
+                },
+                parkingLotId,
+              },
+              select: {
+                id: true,
+              },
+            })
+        : [];
+
+    const validSectionIds =
+      new Set(
+        existingSections.map(
+          (section) =>
+            section.id,
+        ),
+      );
+
+    const nullableNumber = (
+      value: unknown,
+    ) => {
+      const parsed =
+        this.numberValue(
+          value,
+        );
+
+      return parsed === null
+        ? null
+        : parsed;
+    };
+
+    const nullableString = (
+      value: unknown,
+    ) =>
+      this.stringValue(
+        value,
+      );
+
+    const nullableDate = (
+      value: unknown,
+    ) => {
+      const raw =
+        this.stringValue(
+          value,
+        );
+
+      if (!raw) {
+        return null;
+      }
+
+      const parsed =
+        new Date(raw);
+
+      return Number.isNaN(
+        parsed.getTime(),
+      )
+        ? null
+        : parsed;
+    };
+
+    const boardData = {
+      parkingLotId,
+      code,
+      name,
+
+      deviceId:
+        nullableString(
+          boardPayload.deviceId,
+        ),
+      macAddress:
+        nullableString(
+          boardPayload.macAddress,
+        ),
+
+      enabled:
+        typeof boardPayload.enabled ===
+          'boolean'
+          ? boardPayload.enabled
+          : true,
+
+      transport:
+        nullableString(
+          boardPayload.transport,
+        ) ??
+        'TCP',
+
+      tcpHost:
+        nullableString(
+          boardPayload.tcpHost,
+        ),
+      tcpPort:
+        nullableNumber(
+          boardPayload.tcpPort,
+        ),
+
+      serialPort:
+        nullableString(
+          boardPayload.serialPort,
+        ),
+      baudRate:
+        nullableNumber(
+          boardPayload.baudRate,
+        ),
+      dataBits:
+        nullableNumber(
+          boardPayload.dataBits,
+        ),
+      parity:
+        nullableString(
+          boardPayload.parity,
+        ),
+      stopBits:
+        nullableNumber(
+          boardPayload.stopBits,
+        ),
+
+      connectTimeoutMs:
+        nullableNumber(
+          boardPayload.connectTimeoutMs,
+        ),
+      readTimeoutMs:
+        nullableNumber(
+          boardPayload.readTimeoutMs,
+        ),
+
+      rows:
+        nullableNumber(
+          boardPayload.rows,
+        ) ??
+        1,
+      cols:
+        nullableNumber(
+          boardPayload.cols,
+        ) ??
+        4,
+
+      moduleType:
+        nullableString(
+          boardPayload.moduleType,
+        ),
+      rgbOrder:
+        nullableString(
+          boardPayload.rgbOrder,
+        ),
+
+      brightness:
+        nullableNumber(
+          boardPayload.brightness,
+        ),
+
+      powerOn:
+        typeof boardPayload.powerOn ===
+          'boolean'
+          ? boardPayload.powerOn
+          : true,
+
+      heartbeatIntervalSec:
+        nullableNumber(
+          boardPayload.heartbeatIntervalSec,
+        ),
+      retryMaxAttempts:
+        nullableNumber(
+          boardPayload.retryMaxAttempts,
+        ),
+      retryBackoffMs:
+        nullableNumber(
+          boardPayload.retryBackoffMs,
+        ),
+
+      mode:
+        nullableString(
+          boardPayload.mode,
+        ) ??
+        'AUTO',
+
+      manualReason:
+        nullableString(
+          boardPayload.manualReason,
+        ),
+      manualExpiresAt:
+        nullableDate(
+          boardPayload.manualExpiresAt,
+        ),
+    };
+
+    await this.prisma.$transaction(
+      async (tx) => {
+        await tx.displayBoard.upsert({
+          where: {
+            id:
+              displayBoardId,
+          },
+          create: {
+            id:
+              displayBoardId,
+            ...boardData,
+          } as any,
+          update:
+            boardData as any,
+        });
+
+        await tx.displayBoardLine.deleteMany({
+          where: {
+            displayBoardId,
+          },
+        });
+
+        if (lines.length > 0) {
+          await tx.displayBoardLine.createMany({
+            data:
+              lines.map(
+                (line) => ({
+                  displayBoardId,
+
+                  source:
+                    this.stringValue(
+                      line.source,
+                    ) ??
+                    'AUTO',
+
+                  lineNo:
+                    this.numberValue(
+                      line.lineNo,
+                    ) ??
+                    1,
+
+                  textTemplate:
+                    this.stringValue(
+                      line.textTemplate,
+                    ) ??
+                    '',
+
+                  enabled:
+                    typeof line.enabled ===
+                      'boolean'
+                      ? line.enabled
+                      : true,
+
+                  fontSize:
+                    this.numberValue(
+                      line.fontSize,
+                    ) ??
+                    1,
+
+                  effect:
+                    this.stringValue(
+                      line.effect,
+                    ) ??
+                    '090009000900',
+
+                  speed:
+                    this.numberValue(
+                      line.speed,
+                    ) ??
+                    2,
+
+                  delay:
+                    this.numberValue(
+                      line.delay,
+                    ) ??
+                    5,
+
+                  neon:
+                    this.numberValue(
+                      line.neon,
+                    ) ??
+                    0,
+
+                  fix:
+                    typeof line.fix ===
+                      'boolean'
+                      ? line.fix
+                      : false,
+
+                  colorCode:
+                    this.numberValue(
+                      line.colorCode,
+                    ) ??
+                    0,
+
+                  fontCode:
+                    this.numberValue(
+                      line.fontCode,
+                    ) ??
+                    0,
+
+                  widthCode:
+                    this.numberValue(
+                      line.widthCode,
+                    ) ??
+                    1,
+
+                  attributeCode:
+                    this.numberValue(
+                      line.attributeCode,
+                    ) ??
+                    0,
+
+                  iconCode:
+                    this.stringValue(
+                      line.iconCode,
+                    ),
+                })) as any,
+          });
+        }
+
+        await tx.displayBoardModule.deleteMany({
+          where: {
+            displayBoardId,
+          },
+        });
+
+        if (modules.length > 0) {
+          await tx.displayBoardModule.createMany({
+            data:
+              modules.map(
+                (module) => {
+                  const sectionId =
+                    this.stringValue(
+                      module.parkingSectionId,
+                    );
+
+                  return {
+                    displayBoardId,
+
+                    rowNo:
+                      this.numberValue(
+                        module.rowNo,
+                      ) ??
+                      1,
+
+                    colNo:
+                      this.numberValue(
+                        module.colNo,
+                      ) ??
+                      1,
+
+                    parkingSectionId:
+                      sectionId &&
+                      validSectionIds.has(
+                        sectionId,
+                      )
+                        ? sectionId
+                        : null,
+
+                    label:
+                      this.stringValue(
+                        module.label,
+                      ),
+
+                    enabled:
+                      typeof module.enabled ===
+                        'boolean'
+                        ? module.enabled
+                        : true,
+
+                    charWidth:
+                      this.numberValue(
+                        module.charWidth,
+                      ) ??
+                      4,
+
+                    padChar:
+                      (
+                        this.stringValue(
+                          module.padChar,
+                        ) ??
+                        ' '
+                      ).slice(
+                        0,
+                        1,
+                      ),
+                  };
+                },
+              ) as any,
+          });
+        }
+      },
+    );
+
+    return {
+      ok: true,
+      applied: true,
+      action:
+        'DISPLAY_BOARD_CONFIGURATION_APPLIED_FROM_CLOUD',
+      edgeNodeId,
+      cursor:
+        message.cursor,
+      outboxId:
+        message.outboxId,
+      eventType:
+        message.eventType,
+
+      sessionId:
+        displayBoardId,
+      sessionNo:
+        code,
+      invoice:
+        null,
+
+      displayBoardId,
+      parkingLotId,
+      lineCount:
+        lines.length,
+      moduleCount:
+        modules.length,
+    };
+  }
+
+  private async applyDisplayCommandFromCloud(
+    edgeNodeId: string,
+    message: ResolvedCloudMessage,
+  ) {
+    const payload =
+      message.payload;
+
+    const cloudCommandId =
+      this.stringValue(
+        payload.cloudCommandId,
+      );
+
+    const displayBoardId =
+      this.stringValue(
+        payload.displayBoardId,
+      );
+
+    const type =
+      this.stringValue(
+        payload.type,
+      );
+
+    if (
+      !cloudCommandId ||
+      !displayBoardId ||
+      !type
+    ) {
+      throw new BadRequestException(
+        'Display command requires cloudCommandId, displayBoardId and type',
+      );
+    }
+
+    const board =
+      await this.prisma.displayBoard.findUnique({
+        where: {
+          id:
+            displayBoardId,
+        },
+      });
+
+    if (!board) {
+      throw new BadRequestException(
+        `Edge display board not found: ${displayBoardId}`,
+      );
+    }
+
+    const existing =
+      await this.prisma.displayCommand.findUnique({
+        where: {
+          id:
+            cloudCommandId,
+        },
+      });
+
+    if (existing) {
+      return {
+        ok: true,
+        applied: false,
+        action:
+          'DISPLAY_COMMAND_ALREADY_APPLIED_FROM_CLOUD',
+        edgeNodeId,
+        cursor:
+          message.cursor,
+        outboxId:
+          message.outboxId,
+        eventType:
+          message.eventType,
+
+        sessionId:
+          displayBoardId,
+        sessionNo:
+          type,
+        invoice:
+          null,
+
+        displayBoardId,
+        cloudCommandId,
+        edgeCommandId:
+          existing.id,
+      };
+    }
+
+    const rawCommandPayload =
+      this.asRecord(
+        payload.commandPayload,
+      );
+
+    const commandPayload = {
+      ...rawCommandPayload,
+      cloudCommandId,
+      cloudEdgeNodeId:
+        edgeNodeId,
+      cloudRequestedAt:
+        this.stringValue(
+          payload.requestedAt,
+        ) ??
+        null,
+    };
+
+    const requestedAtRaw =
+      this.stringValue(
+        payload.requestedAt,
+      );
+
+    const requestedAt =
+      requestedAtRaw
+        ? new Date(
+            requestedAtRaw,
+          )
+        : new Date();
+
+    const validRequestedAt =
+      Number.isNaN(
+        requestedAt.getTime(),
+      )
+        ? new Date()
+        : requestedAt;
+
+    const edgeCommand =
+      await this.prisma.$transaction(
+        async (tx) => {
+          const boardUpdate:
+            Record<
+              string,
+              unknown
+            > = {};
+
+          if (
+            type ===
+            'BRIGHTNESS'
+          ) {
+            const brightness =
+              this.numberValue(
+                rawCommandPayload.brightness,
+              );
+
+            if (
+              brightness !==
+              null
+            ) {
+              boardUpdate.brightness =
+                brightness;
+            }
+          }
+
+          if (
+            type ===
+              'POWER' &&
+            typeof rawCommandPayload.powerOn ===
+              'boolean'
+          ) {
+            boardUpdate.powerOn =
+              rawCommandPayload.powerOn;
+          }
+
+          if (
+            Object.keys(
+              boardUpdate,
+            ).length > 0
+          ) {
+            await tx.displayBoard.update({
+              where: {
+                id:
+                  displayBoardId,
+              },
+              data:
+                boardUpdate as any,
+            });
+          }
+
+          return tx.displayCommand.create({
+            data: {
+              id:
+                cloudCommandId,
+              displayBoardId,
+              type,
+              payload:
+                commandPayload as any,
+              status:
+                'PENDING' as any,
+              requestedAt:
+                validRequestedAt,
+            } as any,
+          });
+        },
+      );
+
+    return {
+      ok: true,
+      applied: true,
+      action:
+        'DISPLAY_COMMAND_APPLIED_FROM_CLOUD',
+      edgeNodeId,
+      cursor:
+        message.cursor,
+      outboxId:
+        message.outboxId,
+      eventType:
+        message.eventType,
+
+      sessionId:
+        displayBoardId,
+      sessionNo:
+        type,
+      invoice:
+        null,
+
+      displayBoardId,
+      cloudCommandId,
+      edgeCommandId:
+        edgeCommand.id,
+      commandStatus:
+        edgeCommand.status,
+    };
+  }
+
+  private async applyEdgeDisplayCommandResult(input: {
+    edgeNodeId: string;
+    event: EdgePushEvent;
+    payload: Record<string, unknown>;
+  }) {
+    const cloudCommandId =
+      this.stringValue(
+        input.payload.cloudCommandId,
+      );
+
+    if (!cloudCommandId) {
+      throw new BadRequestException(
+        'Display result requires cloudCommandId',
+      );
+    }
+
+    const command =
+      await this.prisma.displayCommand.findUnique({
+        where: {
+          id:
+            cloudCommandId,
+        },
+      });
+
+    if (!command) {
+      throw new BadRequestException(
+        `Cloud display command not found: ${cloudCommandId}`,
+      );
+    }
+
+    const status =
+      this.stringValue(
+        input.payload.status,
+      ) ??
+      'FAILED';
+
+    const parseDate = (
+      value: unknown,
+    ) => {
+      const raw =
+        this.stringValue(
+          value,
+        );
+
+      if (!raw) {
+        return null;
+      }
+
+      const parsed =
+        new Date(raw);
+
+      return Number.isNaN(
+        parsed.getTime(),
+      )
+        ? null
+        : parsed;
+    };
+
+    const updated =
+      await this.prisma.displayCommand.update({
+        where: {
+          id:
+            command.id,
+        },
+        data: {
+          status:
+            status as any,
+          packetHex:
+            this.stringValue(
+              input.payload.packetHex,
+            ),
+          responseHex:
+            this.stringValue(
+              input.payload.responseHex,
+            ),
+          errorMessage:
+            this.stringValue(
+              input.payload.errorMessage,
+            ) ??
+            '',
+          attempts:
+            this.numberValue(
+              input.payload.attempts,
+            ) ??
+            command.attempts,
+          processingAt:
+            parseDate(
+              input.payload.processingAt,
+            ) ??
+            command.processingAt,
+          sentAt:
+            parseDate(
+              input.payload.sentAt,
+            ) ??
+            command.sentAt,
+          ackedAt:
+            parseDate(
+              input.payload.ackedAt,
+            ) ??
+            command.ackedAt,
+          failedAt:
+            parseDate(
+              input.payload.failedAt,
+            ) ??
+            command.failedAt,
+        },
+      });
+
+    if (
+      status ===
+      'ACKED'
+    ) {
+      await this.prisma.displayBoard.update({
+        where: {
+          id:
+            command.displayBoardId,
+        },
+        data: {
+          lastStatus:
+            'OK' as any,
+          lastError:
+            null,
+          lastSentAt:
+            updated.sentAt ??
+            new Date(),
+          lastAckAt:
+            updated.ackedAt ??
+            new Date(),
+          lastSentPayload:
+            command.payload as any,
+          lastResponseHex:
+            updated.responseHex,
+        },
+      });
+    }
+
+    if (
+      status ===
+      'FAILED'
+    ) {
+      await this.prisma.displayBoard.update({
+        where: {
+          id:
+            command.displayBoardId,
+        },
+        data: {
+          lastStatus:
+            'ERROR' as any,
+          lastError:
+            updated.errorMessage ??
+            'Display command failed',
+          lastSentAt:
+            updated.sentAt ??
+            new Date(),
+          lastResponseHex:
+            updated.responseHex,
+        },
+      });
+    }
+
+    return {
+      action:
+        'EDGE_DISPLAY_COMMAND_RESULT_APPLIED',
+      sessionId:
+        command.displayBoardId,
+      sessionNo:
+        command.type,
+      invoice:
+        null,
+
+      edgeNodeId:
+        input.edgeNodeId,
+      cloudCommandId:
+        command.id,
+      displayBoardId:
+        command.displayBoardId,
+      commandStatus:
+        updated.status,
+    };
+  }
+
+  private async createCloudInvoiceForEdgePaidExit(input: {
+    edgeNodeId: string;
+    event: EdgePushEvent;
+    payload: Record<string, unknown>;
+    cloudSessionId: string;
+  }) {
+    const edgeInvoice =
+      this.asRecord(
+        input.payload.edgeInvoice,
+      );
+
+    const incomingMetadata =
+      this.asRecord(
+        input.payload.metadata,
+      );
+
+    const session =
+      await this.prisma
+        .parkingSession.findUnique({
+          where: {
+            id:
+              input.cloudSessionId,
+          },
+        });
+
+    if (!session) {
+      throw new BadRequestException(
+        `Cloud parking session not found: ${input.cloudSessionId}`,
+      );
+    }
+
+    const occurredAt =
+      this.resolveOccurredAt(
+        this.stringValue(
+          input.payload.exitTime,
+        ) ??
+        this.stringValue(
+          input.payload.occurredAt,
+        ) ??
+        input.event.occurredAt,
+      );
+
+    const edgeInvoiceId =
+      this.stringValue(
+        edgeInvoice.id,
+      ) ??
+      this.stringValue(
+        input.payload.invoiceId,
+      );
+
+    const edgeInvoiceNo =
+      this.stringValue(
+        edgeInvoice.invoiceNo,
+      ) ??
+      this.stringValue(
+        input.payload.invoiceNo,
+      );
+
+    const edgeInvoiceStatus =
+      this.stringValue(
+        edgeInvoice.status,
+      ) ??
+      this.stringValue(
+        input.payload.invoiceStatus,
+      ) ??
+      'PAID';
+
+    const edgeInvoiceAmount =
+      Math.max(
+        0,
+        Math.round(
+          this.numberValue(
+            edgeInvoice.amount,
+          ) ??
+          this.numberValue(
+            input.payload.amount,
+          ) ??
+          0,
+        ),
+      );
+
+    const edgeInvoicePaidAmount =
+      Math.max(
+        0,
+        Math.round(
+          this.numberValue(
+            edgeInvoice.paidAmount,
+          ) ??
+          this.numberValue(
+            input.payload.paidAmount,
+          ) ??
+          edgeInvoiceAmount,
+        ),
+      );
+
+    const edgeInvoiceUnpaidAmount =
+      Math.max(
+        0,
+        Math.round(
+          this.numberValue(
+            edgeInvoice.unpaidAmount,
+          ) ??
+          this.numberValue(
+            input.payload.unpaidAmount,
+          ) ??
+          0,
+        ),
+      );
+
+    const paymentMethod =
+      this.stringValue(
+        incomingMetadata
+          .manualExitPaymentMethod,
+      ) ??
+      this.stringValue(
+        incomingMetadata
+          .paymentMethod,
+      ) ??
+      'EDGE_REPORTED';
+
+    const providerReference =
+      this.stringValue(
+        input.event.eventId,
+      ) ??
+      [
+        'EDGE-PAID-EXIT',
+        input.edgeNodeId,
+        session.id,
+        occurredAt.toISOString(),
+      ].join(':');
+
+    /*
+     * Cloud 정책을 기준으로 공식 Invoice를 생성한다.
+     * Edge Invoice는 별도 namespace의 감사 스냅샷으로 보존한다.
+     */
+    const ensured =
+      await this.invoicesService
+        .ensureInvoiceForSession({
+          sessionId:
+            session.id,
+          now:
+            occurredAt,
+          forceRecalculate:
+            true,
+        });
+
+    const transactionResult =
+      await this.prisma.$transaction(
+        async (tx) => {
+          const currentInvoice =
+            await tx.invoice
+              .findUnique({
+                where: {
+                  id:
+                    ensured.invoice.id,
+                },
+              });
+
+          if (!currentInvoice) {
+            throw new BadRequestException(
+              `Cloud Invoice not found after creation: ${ensured.invoice.id}`,
+            );
+          }
+
+          const existingPaymentTransaction =
+            await (tx as any)
+              .paymentTransaction
+              .findFirst({
+                where: {
+                  provider:
+                    'EDGE_PAYMENT_SYNC',
+                  providerReference,
+                  parkingSessionId:
+                    session.id,
+                },
+              });
+
+          const targetPaidAmount =
+            Math.min(
+              currentInvoice.amount,
+              edgeInvoicePaidAmount,
+            );
+
+          const paymentDelta =
+            existingPaymentTransaction
+              ? 0
+              : Math.max(
+                  0,
+                  targetPaidAmount -
+                    currentInvoice.paidAmount,
+                );
+
+          const nextPaidAmount =
+            Math.min(
+              currentInvoice.amount,
+              currentInvoice.paidAmount +
+                paymentDelta,
+            );
+
+          const nextUnpaidAmount =
+            Math.max(
+              0,
+              currentInvoice.amount -
+                nextPaidAmount,
+            );
+
+          const nextInvoiceStatus =
+            nextUnpaidAmount <= 0
+              ? 'PAID'
+              : nextPaidAmount > 0
+                ? 'PARTIALLY_PAID'
+                : 'ISSUED';
+
+          const currentInvoiceMetadata =
+            this.asRecord(
+              currentInvoice.metadata,
+            );
+
+          const updatedInvoice =
+            await tx.invoice.update({
+              where: {
+                id:
+                  currentInvoice.id,
+              },
+              data: {
+                paidAmount:
+                  nextPaidAmount,
+                unpaidAmount:
+                  nextUnpaidAmount,
+                status:
+                  nextInvoiceStatus as any,
+                paidAt:
+                  nextInvoiceStatus ===
+                  'PAID'
+                    ? currentInvoice
+                        .paidAt ??
+                      occurredAt
+                    : currentInvoice
+                        .paidAt,
+                metadata: {
+                  ...currentInvoiceMetadata,
+
+                  source:
+                    'EDGE_PAID_EXIT_SYNC',
+
+                  edgeNodeId:
+                    input.edgeNodeId,
+                  edgeSessionId:
+                    this.stringValue(
+                      input.payload
+                        .sessionId,
+                    ) ??
+                    session.id,
+                  edgeSessionNo:
+                    this.stringValue(
+                      input.payload
+                        .sessionNo,
+                    ) ??
+                    session.sessionNo,
+
+                  edgeInvoiceId,
+                  edgeInvoiceNo,
+                  edgeInvoiceStatus,
+                  edgeInvoiceAmount,
+                  edgeInvoicePaidAmount,
+                  edgeInvoiceUnpaidAmount,
+
+                  edgePaymentMethod:
+                    paymentMethod,
+                  edgePaymentProviderReference:
+                    providerReference,
+                  edgePaymentAppliedAmount:
+                    paymentDelta,
+                  edgePaymentSyncedAt:
+                    occurredAt.toISOString(),
+
+                  edgeCloudAmountDifference:
+                    edgeInvoiceAmount -
+                    currentInvoice.amount,
+                } as any,
+              },
+            });
+
+          if (
+            !existingPaymentTransaction &&
+            paymentDelta > 0
+          ) {
+            await (tx as any)
+              .paymentTransaction
+              .create({
+                data: {
+                  transactionNo: [
+                    'EDGE',
+                    occurredAt
+                      .getTime(),
+                    randomUUID()
+                      .replace(
+                        /-/g,
+                        '',
+                      )
+                      .slice(
+                        0,
+                        12,
+                      )
+                      .toUpperCase(),
+                  ].join('-'),
+
+                  invoiceId:
+                    updatedInvoice.id,
+                  parkingSessionId:
+                    session.id,
+
+                  provider:
+                    'EDGE_PAYMENT_SYNC',
+                  method:
+                    paymentMethod,
+                  status:
+                    'APPROVED',
+
+                  amount:
+                    paymentDelta,
+                  currency:
+                    'KRW',
+
+                  providerReference,
+                  approvedAt:
+                    occurredAt,
+
+                  metadata: {
+                    source:
+                      'PARKING_SESSION_EXITED_FROM_EDGE',
+                    edgeNodeId:
+                      input.edgeNodeId,
+                    edgeEventId:
+                      input.event
+                        .eventId ??
+                      null,
+                    edgeSessionId:
+                      this.stringValue(
+                        input.payload
+                          .sessionId,
+                      ) ??
+                      session.id,
+                    edgeInvoiceId,
+                    edgeInvoiceNo,
+                    edgeReportedAmount:
+                      edgeInvoiceAmount,
+                    edgeReportedPaidAmount:
+                      edgeInvoicePaidAmount,
+                    edgeReportedUnpaidAmount:
+                      edgeInvoiceUnpaidAmount,
+                  } as any,
+                },
+              });
+          }
+
+          const sessionMetadata =
+            this.asRecord(
+              session.metadata,
+            );
+
+          await tx.parkingSession
+            .update({
+              where: {
+                id:
+                  session.id,
+              },
+              data: {
+                primaryInvoiceId:
+                  updatedInvoice.id,
+                amount:
+                  updatedInvoice.amount,
+                paidAmount:
+                  updatedInvoice.paidAmount,
+                unpaidAmount:
+                  updatedInvoice.unpaidAmount,
+
+                metadata: {
+                  ...sessionMetadata,
+
+                  source:
+                    'EDGE_SYNC',
+                  edgeNodeId:
+                    input.edgeNodeId,
+                  syncedFromEdge:
+                    true,
+                  syncedFromEdgeAt:
+                    new Date()
+                      .toISOString(),
+
+                  edgeInvoiceId,
+                  edgeInvoiceNo,
+                  edgeInvoiceStatus,
+                  edgeInvoiceAmount,
+                  edgeInvoicePaidAmount,
+                  edgeInvoiceUnpaidAmount,
+
+                  cloudInvoiceId:
+                    updatedInvoice.id,
+                  cloudInvoiceNo:
+                    updatedInvoice
+                      .invoiceNo,
+                  cloudInvoiceStatus:
+                    updatedInvoice.status,
+                  cloudInvoiceAmount:
+                    updatedInvoice.amount,
+                  cloudInvoicePaidAmount:
+                    updatedInvoice
+                      .paidAmount,
+                  cloudInvoiceUnpaidAmount:
+                    updatedInvoice
+                      .unpaidAmount,
+
+                  /*
+                   * 기존 UI 및 결제 서비스 호환용
+                   * 공식 Cloud Invoice namespace.
+                   */
+                  invoiceId:
+                    updatedInvoice.id,
+                  invoiceNo:
+                    updatedInvoice
+                      .invoiceNo,
+                  invoiceStatus:
+                    updatedInvoice.status,
+                  invoiceAmount:
+                    updatedInvoice.amount,
+                  invoicePaidAmount:
+                    updatedInvoice
+                      .paidAmount,
+                  invoiceUnpaidAmount:
+                    updatedInvoice
+                      .unpaidAmount,
+
+                  paymentStatus:
+                    this
+                      .resolvePaymentStatusFromInvoice({
+                        paidAmount:
+                          updatedInvoice
+                            .paidAmount,
+                        unpaidAmount:
+                          updatedInvoice
+                            .unpaidAmount,
+                      }),
+
+                  paymentRequired:
+                    updatedInvoice
+                      .unpaidAmount > 0,
+
+                  invoiceCreatedAtEdge:
+                    Boolean(
+                      edgeInvoiceId,
+                    ),
+                  invoiceCreatedByCloudSync:
+                    true,
+                  invoiceSyncRequired:
+                    false,
+
+                  cloudInvoiceSyncedAt:
+                    new Date()
+                      .toISOString(),
+                  cloudInvoiceSyncEventType:
+                    'PARKING_SESSION_EXITED_FROM_EDGE',
+
+                  feeCalculation:
+                    ensured.calculation,
+                } as any,
+              },
+            });
+
+          await tx.parkingSessionEvent
+            .create({
+              data: {
+                sessionId:
+                  session.id,
+                type:
+                  'PAID_INVOICE_APPLIED_BY_CLOUD_SYNC',
+                source:
+                  'EDGE_SYNC',
+                payload: {
+                  edgeNodeId:
+                    input.edgeNodeId,
+                  edgeEventId:
+                    input.event
+                      .eventId ??
+                    null,
+                  edgeInvoiceId,
+                  edgeInvoiceNo,
+                  edgeInvoiceStatus,
+                  edgeInvoiceAmount,
+                  edgeInvoicePaidAmount,
+                  edgeInvoiceUnpaidAmount,
+                  cloudInvoiceId:
+                    updatedInvoice.id,
+                  cloudInvoiceNo:
+                    updatedInvoice
+                      .invoiceNo,
+                  cloudInvoiceStatus:
+                    updatedInvoice.status,
+                  cloudInvoiceAmount:
+                    updatedInvoice.amount,
+                  cloudInvoicePaidAmount:
+                    updatedInvoice
+                      .paidAmount,
+                  cloudInvoiceUnpaidAmount:
+                    updatedInvoice
+                      .unpaidAmount,
+                  paymentDelta,
+                  occurredAt:
+                    occurredAt
+                      .toISOString(),
+                } as any,
+              },
+            });
+
+          /*
+           * Cloud 공식 Invoice를 Edge metadata에
+           * 적용하기 위한 회신 Outbox.
+           */
+          const cloudToEdgeEvent =
+            await tx.domainEvent
+              .create({
+                data: {
+                  eventId:
+                    randomUUID(),
+                  aggregateType:
+                    'Invoice',
+                  aggregateId:
+                    updatedInvoice.id,
+                  eventType:
+                    'INVOICE_CREATED_FROM_CLOUD',
+                  payload: {
+                    edgeNodeId:
+                      input.edgeNodeId,
+                    edgeSessionId:
+                      this.stringValue(
+                        input.payload
+                          .sessionId,
+                      ) ??
+                      session.id,
+                    edgeSessionNo:
+                      this.stringValue(
+                        input.payload
+                          .sessionNo,
+                      ) ??
+                      session.sessionNo,
+                    cloudSessionId:
+                      session.id,
+                    cloudSessionNo:
+                      session.sessionNo,
+
+                    invoiceId:
+                      updatedInvoice.id,
+                    invoiceNo:
+                      updatedInvoice
+                        .invoiceNo,
+                    invoiceStatus:
+                      updatedInvoice.status,
+                    invoiceAmount:
+                      updatedInvoice.amount,
+                    invoicePaidAmount:
+                      updatedInvoice
+                        .paidAmount,
+                    invoiceUnpaidAmount:
+                      updatedInvoice
+                        .unpaidAmount,
+
+                    paymentStatus:
+                      this
+                        .resolvePaymentStatusFromInvoice({
+                          paidAmount:
+                            updatedInvoice
+                              .paidAmount,
+                          unpaidAmount:
+                            updatedInvoice
+                              .unpaidAmount,
+                        }),
+
+                    edgeInvoiceId,
+                    edgeInvoiceNo,
+
+                    occurredAt:
+                      occurredAt
+                        .toISOString(),
+
+                    destination:
+                      `EDGE:${input.edgeNodeId}`,
+                    createdForEdgeSync:
+                      true,
+                  } as any,
+                  occurredAt,
+                },
+              });
+
+          await tx.syncOutbox
+            .create({
+              data: {
+                domainEventId:
+                  cloudToEdgeEvent.id,
+                destination:
+                  `EDGE:${input.edgeNodeId}`,
+                status:
+                  'PENDING' as any,
+              },
+            });
+
+          return {
+            invoice:
+              updatedInvoice,
+            paymentDelta,
+            reusedPaymentTransaction:
+              Boolean(
+                existingPaymentTransaction,
+              ),
+          };
+        },
+      );
+
+    return {
+      action:
+        'PAID_INVOICE_APPLIED_FROM_EDGE_EXIT',
+      sessionId:
+        session.id,
+      sessionNo:
+        session.sessionNo,
+      paymentDelta:
+        transactionResult.paymentDelta,
+      reusedPaymentTransaction:
+        transactionResult
+          .reusedPaymentTransaction,
+      invoice: {
+        invoiceId:
+          transactionResult.invoice.id,
+        invoiceNo:
+          transactionResult.invoice
+            .invoiceNo,
+        invoiceStatus:
+          transactionResult.invoice
+            .status,
+        invoiceAmount:
+          transactionResult.invoice
+            .amount,
+        invoicePaidAmount:
+          transactionResult.invoice
+            .paidAmount,
+        invoiceUnpaidAmount:
+          transactionResult.invoice
+            .unpaidAmount,
+      },
+    };
+  }
+
   private async createCloudInvoiceForEdgeUnpaidExit(input: {
     edgeNodeId: string;
     event: EdgePushEvent;
@@ -3858,9 +6657,13 @@ export class SyncService {
     payload: Record<string, unknown>;
     result: {
       action: string;
-      sessionId: string;
-      sessionNo: string;
-      invoice: Record<string, unknown> | null;
+      sessionId?: string;
+      sessionNo?: string;
+      parkingLotId?: string;
+      code?: string;
+      approvalRequestId?: string;
+      invoice?: Record<string, unknown> | null;
+      [key: string]: unknown;
     };
   }) {
     return this.prisma.syncInbox.update({
@@ -3875,9 +6678,14 @@ export class SyncService {
           cloudProcessing: {
             status: 'PROCESSED',
             action: input.result.action,
-            sessionId: input.result.sessionId,
-            sessionNo: input.result.sessionNo,
-            invoice: input.result.invoice,
+            sessionId: input.result.sessionId ?? null,
+            sessionNo: input.result.sessionNo ?? null,
+            parkingLotId: input.result.parkingLotId ?? null,
+            code: input.result.code ?? null,
+            approvalRequestId:
+              input.result.approvalRequestId ??
+              null,
+            invoice: input.result.invoice ?? null,
             processedAt: new Date().toISOString(),
           },
         } as any,
@@ -4024,7 +6832,7 @@ export class SyncService {
   }
 
   private isCloudMode() {
-    return (process.env.APP_PROFILE ?? process.env.APP_MODE ?? 'cloud').toLowerCase() === 'cloud';
+    return isCloudProfile();
   }
 
   private createCloudSyncedSessionNo(date: Date) {

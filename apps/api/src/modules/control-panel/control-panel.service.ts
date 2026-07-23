@@ -30,43 +30,131 @@ type ServiceStatus = {
   checkedAt: string;
 };
 
+const PROFILE_RUNTIME = {
+  cloud: {
+    apiName: 'Cloud API',
+    webName: 'Cloud Web',
+    apiDescription: 'NestJS Cloud API 서비스',
+    webDescription: 'Next.js Cloud Web Console 서비스',
+    apiService: 'kosmos-api@cloud.service',
+    webService: 'kosmos-web@cloud.service',
+    apiPort: 3000,
+    webPort: 4000,
+  },
+  edge: {
+    apiName: 'Edge API',
+    webName: 'Edge Web',
+    apiDescription: 'NestJS Connected Edge API 서비스',
+    webDescription: 'Next.js Connected Edge Web Console 서비스',
+    apiService: 'kosmos-api@edge.service',
+    webService: 'kosmos-web@edge.service',
+    apiPort: 3001,
+    webPort: 4001,
+  },
+  'edge-standalone': {
+    apiName: 'Edge Standalone API',
+    webName: 'Edge Standalone Web',
+    apiDescription: 'NestJS Edge Standalone API 서비스',
+    webDescription: 'Next.js Edge Standalone Web Console 서비스',
+    apiService: 'kosmos-api@edge-standalone.service',
+    webService: 'kosmos-web@edge-standalone.service',
+    apiPort: 3002,
+    webPort: 4002,
+  },
+  demo: {
+    apiName: 'Demo API',
+    webName: 'Demo Web',
+    apiDescription: 'NestJS Demo API 서비스',
+    webDescription: 'Next.js Demo Web Console 서비스',
+    apiService: 'kosmos-api@demo.service',
+    webService: 'kosmos-web@demo.service',
+    apiPort: 3003,
+    webPort: 4003,
+  },
+  development: {
+    apiName: 'Development API',
+    webName: 'Development Web',
+    apiDescription: 'NestJS Development API 서비스',
+    webDescription: 'Next.js Development Web Console 서비스',
+    apiService: 'kosmos-api@development.service',
+    webService: 'kosmos-web@development.service',
+    apiPort: 3004,
+    webPort: 4004,
+  },
+} as const;
+
+type RuntimeProfile = keyof typeof PROFILE_RUNTIME;
+
+function getRuntimeProfile(): RuntimeProfile {
+  const profile = (
+    process.env.APP_PROFILE ??
+    process.env.APP_MODE ??
+    'edge'
+  )
+    .trim()
+    .toLowerCase();
+
+  return profile in PROFILE_RUNTIME
+    ? (profile as RuntimeProfile)
+    : 'edge';
+}
+
+const CURRENT_RUNTIME = PROFILE_RUNTIME[getRuntimeProfile()];
+
 const DEFAULT_SERVICES = [
   {
-    id: 'control_api',
-    key: 'api',
-    name: 'Cloud API',
-    description: 'NestJS Cloud API 서비스',
+    id: 'control_edge_api',
+    key: 'edge-api',
+    name: CURRENT_RUNTIME.apiName,
+    description: CURRENT_RUNTIME.apiDescription,
     host: 'localhost',
-    port: 3000,
+    port: CURRENT_RUNTIME.apiPort,
     commandType: 'systemctl',
-    targetName: process.env.CONTROL_PANEL_API_SERVICE ?? 'kosmos-cloud-api',
+    targetName:
+      process.env.CONTROL_PANEL_API_SERVICE ??
+      CURRENT_RUNTIME.apiService,
     enabled: true,
     sortOrder: 10,
   },
   {
-    id: 'control_web',
-    key: 'web',
-    name: 'Edge Web',
-    description: 'Next.js Web Console 서비스',
+    id: 'control_edge_web',
+    key: 'edge-web',
+    name: CURRENT_RUNTIME.webName,
+    description: CURRENT_RUNTIME.webDescription,
     host: 'localhost',
-    port: 4000,
+    port: CURRENT_RUNTIME.webPort,
     commandType: 'systemctl',
-    targetName: process.env.CONTROL_PANEL_WEB_SERVICE ?? 'kosmos-edge-web',
+    targetName:
+      process.env.CONTROL_PANEL_WEB_SERVICE ??
+      CURRENT_RUNTIME.webService,
     enabled: true,
     sortOrder: 20,
   },
   {
-    id: 'control_rust_daemon',
-    key: 'rust-daemon',
-    name: 'Rust Daemon',
-    description: 'MQTT/센서 처리 Rust daemon',
+    id: 'control_sensor_daemon',
+    key: 'sensor-daemon',
+    name: 'Sensor Daemon',
+    description: 'LoRa/MQTT 주차감지센서 수신 및 Edge API 연동 서비스',
     host: 'localhost',
     port: null,
     commandType: 'systemctl',
     targetName:
-      process.env.CONTROL_PANEL_RUST_DAEMON_SERVICE ?? 'kosmos-rust-daemon',
+      process.env.CONTROL_PANEL_SENSOR_DAEMON_SERVICE ?? 'kosmos-sensor-daemon',
     enabled: true,
     sortOrder: 30,
+  },
+  {
+    id: 'control_display_daemon',
+    key: 'display-daemon',
+    name: 'Display Daemon',
+    description: '전광판 제어 및 송신 daemon 서비스',
+    host: 'localhost',
+    port: null,
+    commandType: 'systemctl',
+    targetName:
+      process.env.CONTROL_PANEL_DISPLAY_DAEMON_SERVICE ?? 'kosmos-display-daemon',
+    enabled: true,
+    sortOrder: 40,
   },
   {
     id: 'control_chirpstack',
@@ -78,20 +166,19 @@ const DEFAULT_SERVICES = [
     commandType: 'systemctl',
     targetName: process.env.CONTROL_PANEL_CHIRPSTACK_SERVICE ?? 'chirpstack',
     enabled: true,
-    sortOrder: 40,
+    sortOrder: 50,
   },
   {
-    id: 'control_websocket',
-    key: 'websocket',
-    name: 'WebSocket',
-    description: '실시간 알림 WebSocket 서비스',
+    id: 'control_mqtt',
+    key: 'mqtt',
+    name: 'MQTT Broker',
+    description: '센서 uplink 수신 MQTT broker',
     host: 'localhost',
-    port: null,
+    port: 1883,
     commandType: 'systemctl',
-    targetName:
-      process.env.CONTROL_PANEL_WEBSOCKET_SERVICE ?? 'kosmos-websocket',
+    targetName: process.env.CONTROL_PANEL_MQTT_SERVICE ?? 'mosquitto',
     enabled: true,
-    sortOrder: 50,
+    sortOrder: 60,
   },
 ] as const;
 
@@ -156,6 +243,17 @@ export class ControlPanelService {
   }
 
   async removeService(id: string) {
+    const protectedServiceIds = new Set([
+      'control_edge_api',
+      'control_edge_web',
+    ]);
+
+    if (protectedServiceIds.has(id)) {
+      throw new BadRequestException(
+        '현재 프로필의 API와 Web 서비스는 삭제할 수 없습니다.',
+      );
+    }
+
     await this.ensureServiceExists(id);
 
     await this.prisma.controlService.delete({
@@ -313,13 +411,45 @@ export class ControlPanelService {
     return Promise.all(services.map((service) => this.getServiceStatus(service)));
   }
 
+  private normalizeCoreRuntimeService<T extends { key: string }>(
+    service: T,
+  ): T {
+    if (service.key !== 'edge-api' && service.key !== 'edge-web') {
+      return service;
+    }
+
+    const runtimeDefault = DEFAULT_SERVICES.find(
+      (item) => item.key === service.key,
+    );
+
+    if (!runtimeDefault) {
+      return service;
+    }
+
+    return {
+      ...service,
+      name: runtimeDefault.name,
+      description: runtimeDefault.description,
+      host: runtimeDefault.host,
+      port: runtimeDefault.port,
+      commandType: runtimeDefault.commandType,
+      targetName: runtimeDefault.targetName,
+      enabled: runtimeDefault.enabled,
+      sortOrder: runtimeDefault.sortOrder,
+    };
+  }
+
   private async findConfiguredServices() {
     try {
       const rows = await this.prisma.controlService.findMany({
         orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
       });
 
-      if (rows.length > 0) return rows;
+      if (rows.length > 0) {
+        return rows.map((row) =>
+          this.normalizeCoreRuntimeService(row),
+        );
+      }
     } catch {
       // DB table may not exist during early deployment.
     }
@@ -339,7 +469,9 @@ export class ControlPanelService {
       },
     });
 
-    if (service) return service;
+    if (service) {
+      return this.normalizeCoreRuntimeService(service);
+    }
 
     return DEFAULT_SERVICES.find(
       (item) => item.id === serviceIdOrKey || item.key === serviceIdOrKey,
@@ -541,8 +673,11 @@ export class ControlPanelService {
   }
 
   private isCurrentApiUnit(targetName: string) {
-    const apiUnit = process.env.CONTROL_PANEL_API_SERVICE ?? 'kosmos-cloud-api';
-    return targetName === apiUnit || targetName === 'kosmos-cloud-api';
+    const apiUnit =
+      process.env.CONTROL_PANEL_API_SERVICE ??
+      CURRENT_RUNTIME.apiService;
+
+    return targetName === apiUnit;
   }
 
   private scheduleDelayedSystemctlRestart(targetName: string, useSudo: boolean) {

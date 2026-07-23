@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { usePathname } from 'next/navigation';
 
 type DisplayModulePreview = {
@@ -71,6 +71,8 @@ type DisplayBoard = {
   lastError?: string | null;
   lastSentAt?: string | null;
   lastAckAt?: string | null;
+  lastRenderedPayload?: unknown;
+  lastSentPayload?: unknown;
   parkingLot?: {
     id: string;
     name: string;
@@ -280,6 +282,45 @@ function visibleCell(value?: string | null) {
   return String(value ?? '').replace(/ /g, '\u00a0');
 }
 
+function payloadDisplayLines(payload: unknown): string[] {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+
+  const lines = (payload as any).lines;
+
+  if (!Array.isArray(lines)) {
+    return [];
+  }
+
+  return lines
+    .map((line: any) => {
+      if (Array.isArray(line?.modules)) {
+        const moduleText = line.modules
+          .map((module: any) =>
+            String(
+              module?.value ??
+                module?.text ??
+                '',
+            ),
+          )
+          .join('');
+
+        if (moduleText.trim()) {
+          return moduleText;
+        }
+      }
+
+      return String(
+        line?.text ??
+          line?.textTemplate ??
+          line?.rawTemplate ??
+          '',
+      );
+    })
+    .filter((line: string) => line.length > 0);
+}
+
 function moduleInputKey(boardId: string, rowNo: number, colNo: number) {
   return `${boardId}:${rowNo}:${colNo}`;
 }
@@ -366,6 +407,7 @@ export default function OperatorDisplayPage() {
       : 'operator';
 
   const [boards, setBoards] = useState<DisplayBoard[]>([]);
+  const [selectedParkingLotId, setSelectedParkingLotId] = useState('');
   const [previews, setPreviews] = useState<Record<string, DisplayPreview>>({});
   const [manualValues, setManualValues] = useState<Record<string, string>>({});
   const [manualColors, setManualColors] = useState<Record<string, number>>({});
@@ -376,6 +418,35 @@ export default function OperatorDisplayPage() {
   const [activeActions, setActiveActions] = useState<Record<string, 'publish' | 'manual' | 'auto'>>({});
   const [pendingActions, setPendingActions] = useState<Record<string, 'publish' | 'manual' | 'auto' | null>>({});
 
+  const visibleBoards = useMemo(
+    () =>
+      selectedParkingLotId
+        ? boards.filter(
+            (board) =>
+              board.parkingLotId === selectedParkingLotId,
+          )
+        : boards.slice(0, 1),
+    [boards, selectedParkingLotId],
+  );
+
+  function selectParkingLot(parkingLotId: string) {
+    setSelectedParkingLotId(parkingLotId);
+
+    const url = new URL(window.location.href);
+
+    if (parkingLotId) {
+      url.searchParams.set('parkingLotId', parkingLotId);
+    } else {
+      url.searchParams.delete('parkingLotId');
+    }
+
+    window.history.replaceState(
+      null,
+      '',
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  }
+
   async function load() {
     setLoading(true);
     setMessage('');
@@ -383,6 +454,34 @@ export default function OperatorDisplayPage() {
     try {
       const nextBoards = await apiFetch<DisplayBoard[]>('/display/boards');
       setBoards(nextBoards);
+
+      const requestedParkingLotId =
+        new URLSearchParams(window.location.search).get(
+          'parkingLotId',
+        );
+
+      setSelectedParkingLotId((current) => {
+        if (
+          current &&
+          nextBoards.some(
+            (board) => board.parkingLotId === current,
+          )
+        ) {
+          return current;
+        }
+
+        if (
+          requestedParkingLotId &&
+          nextBoards.some(
+            (board) =>
+              board.parkingLotId === requestedParkingLotId,
+          )
+        ) {
+          return requestedParkingLotId;
+        }
+
+        return nextBoards[0]?.parkingLotId ?? '';
+      });
 
       const previewPairs = await Promise.all(
         nextBoards.map(async (board) => {
@@ -476,6 +575,17 @@ export default function OperatorDisplayPage() {
   }
 
   async function publish(boardId: string) {
+    const board = boards.find(
+      (item) => item.id === boardId,
+    );
+
+    if (!board?.enabled) {
+      setMessage(
+        '비활성 상태의 전광판에는 송출할 수 없습니다.',
+      );
+      return;
+    }
+
     setActiveActions((prev) => ({ ...prev, [boardId]: 'publish' }));
     setPendingActions((prev) => ({ ...prev, [boardId]: 'publish' }));
     setMessage('현재 문구 송신 명령을 요청하는 중입니다...');
@@ -501,6 +611,17 @@ export default function OperatorDisplayPage() {
   }
 
   async function setAutoMode(boardId: string) {
+    const board = boards.find(
+      (item) => item.id === boardId,
+    );
+
+    if (!board?.enabled) {
+      setMessage(
+        '비활성 상태의 전광판은 자동 모드로 전환할 수 없습니다.',
+      );
+      return;
+    }
+
     setActiveActions((prev) => ({ ...prev, [boardId]: 'auto' }));
     setPendingActions((prev) => ({ ...prev, [boardId]: 'auto' }));
     setMessage('자동 모드 복귀 명령을 요청하는 중입니다...');
@@ -565,6 +686,13 @@ export default function OperatorDisplayPage() {
   }
 
   async function setManualMode(board: DisplayBoard) {
+    if (!board.enabled) {
+      setMessage(
+        '비활성 상태의 전광판에는 수동 송출할 수 없습니다.',
+      );
+      return;
+    }
+
     const preview = previews[board.id];
 
     if (!preview) {
@@ -644,7 +772,7 @@ export default function OperatorDisplayPage() {
         <div>
           <h1 style={{ margin: 0, fontSize: 28 }}>전광판 운영</h1>
           <p style={{ marginTop: 8, color: '#666' }}>
-            왼쪽은 현재 송신값, 오른쪽은 수동 송신값입니다. 라벨은 화면 표시용이며 전광판에는 전송되지 않습니다.
+            왼쪽은 현재 계산 내용, 오른쪽은 수동 송신값입니다. 라벨은 화면 표시용이며 전광판에는 전송되지 않습니다.
           </p>
           <p style={{ marginTop: 4, color: '#999', fontSize: 12 }}>
             DISPLAY_UI_VERSION_20260706_BUTTON_FIX
@@ -653,7 +781,17 @@ export default function OperatorDisplayPage() {
 
         <div style={{ display: 'flex', gap: 10 }}>
           <a
-            href={displayRole === 'admin' ? '/admin/display/settings' : '/manager/display/settings'}
+            href={`${
+              displayRole === 'admin'
+                ? '/admin/display/settings'
+                : '/manager/display/settings'
+            }${
+              selectedParkingLotId
+                ? `?parkingLotId=${encodeURIComponent(
+                    selectedParkingLotId,
+                  )}`
+                : ''
+            }`}
             style={{
               padding: '10px 14px',
               borderRadius: 10,
@@ -682,6 +820,84 @@ export default function OperatorDisplayPage() {
         </div>
       </div>
 
+
+      {boards.length > 0 ? (
+        <section
+          style={{
+            marginTop: 20,
+            padding: 16,
+            borderRadius: 16,
+            border: '1px solid #e5e7eb',
+            background: '#fff',
+          }}
+        >
+          <label
+            htmlFor="display-parking-lot"
+            style={{
+              display: 'block',
+              marginBottom: 8,
+              fontSize: 13,
+              fontWeight: 800,
+              color: '#475569',
+            }}
+          >
+            주차장 선택
+          </label>
+
+          <select
+            id="display-parking-lot"
+            name="parkingLotId"
+            value={selectedParkingLotId}
+            onChange={(event) =>
+              selectParkingLot(event.target.value)
+            }
+            style={{
+              width: '100%',
+              minHeight: 46,
+              borderRadius: 12,
+              border: '1px solid #cbd5e1',
+              background: '#fff',
+              padding: '0 14px',
+              fontWeight: 700,
+            }}
+          >
+            {boards.map((board) => (
+              <option
+                key={board.parkingLotId}
+                value={board.parkingLotId}
+              >
+                {board.parkingLot?.name ?? board.name}
+                {' · '}
+                {board.enabled ? '활성' : '비활성'}
+              </option>
+            ))}
+          </select>
+
+          {visibleBoards[0] ? (
+            <div
+              style={{
+                marginTop: 10,
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 12,
+                fontSize: 13,
+                color: '#64748b',
+              }}
+            >
+              <span>
+                Controller ID: {visibleBoards[0].id}
+              </span>
+              <span>
+                운영 상태:{' '}
+                {visibleBoards[0].enabled
+                  ? '활성'
+                  : '비활성'}
+              </span>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
       {message && (
         <div
           style={{
@@ -698,13 +914,16 @@ export default function OperatorDisplayPage() {
 
       {loading ? (
         <div style={{ marginTop: 32 }}>불러오는 중...</div>
-      ) : boards.length === 0 ? (
+      ) : visibleBoards.length === 0 ? (
         <div style={{ marginTop: 32 }}>등록된 전광판이 없습니다.</div>
       ) : (
         <div style={{ display: 'grid', gap: 20, marginTop: 24 }}>
-          {boards.map((board) => {
+          {visibleBoards.map((board) => {
             const preview = previews[board.id];
             const modules = flattenModules(preview);
+            const lastSentLines = payloadDisplayLines(
+              board.lastSentPayload,
+            );
 
             return (
               <section
@@ -757,6 +976,106 @@ export default function OperatorDisplayPage() {
                       상태: {statusLabel(board.lastStatus)}
                     </div>
                   </div>
+                </div>
+
+                {!board.enabled ? (
+                  <div
+                    style={{
+                      marginTop: 18,
+                      padding: 14,
+                      borderRadius: 14,
+                      border: '1px solid #fecaca',
+                      background: '#fef2f2',
+                      color: '#b91c1c',
+                      fontWeight: 700,
+                    }}
+                  >
+                    이 주차장의 전광판은 비활성 상태입니다.
+                    설정 조회는 가능하지만 송출 명령은 실행되지 않습니다.
+                  </div>
+                ) : null}
+
+                <div
+                  style={{
+                    marginTop: 18,
+                    padding: 16,
+                    borderRadius: 16,
+                    border: '1px solid #dbeafe',
+                    background: '#f8fbff',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 18,
+                        fontWeight: 800,
+                      }}
+                    >
+                      마지막 실제 송출 내용
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: '#64748b',
+                        textAlign: 'right',
+                      }}
+                    >
+                      <div>
+                        송출: {formatDateTime(board.lastSentAt)}
+                      </div>
+                      <div>
+                        응답: {formatDateTime(board.lastAckAt)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {lastSentLines.length > 0 ? (
+                    <div
+                      style={{
+                        display: 'grid',
+                        gap: 8,
+                        marginTop: 12,
+                      }}
+                    >
+                      {lastSentLines.map((line, index) => (
+                        <div
+                          key={`${board.id}-last-sent-${index}`}
+                          style={{
+                            borderRadius: 10,
+                            background: '#111827',
+                            padding: '10px 14px',
+                            color: '#facc15',
+                            fontFamily: 'monospace',
+                            fontSize: 18,
+                            fontWeight: 800,
+                            letterSpacing: 2,
+                            whiteSpace: 'pre-wrap',
+                            overflowWrap: 'anywhere',
+                          }}
+                        >
+                          {visibleCell(line)}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        color: '#64748b',
+                        fontSize: 14,
+                      }}
+                    >
+                      아직 ACK가 완료된 실제 송출 이력이 없습니다.
+                    </div>
+                  )}
                 </div>
 
                 {preview && (

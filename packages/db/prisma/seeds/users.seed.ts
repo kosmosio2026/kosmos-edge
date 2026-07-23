@@ -1,7 +1,21 @@
 import type { PrismaClient } from '../../generated/client';
-import { hash } from 'bcryptjs';
+import { hashPassword } from '../../src/security/password';
 
-const PASSWORD = 'kosmos2026!!';
+function getRequiredTestAccountPassword() {
+  const password =
+    process.env.KOSMOS_TEST_ACCOUNT_PASSWORD?.trim();
+
+  if (!password) {
+    throw new Error(
+      'KOSMOS_TEST_ACCOUNT_PASSWORD is required',
+    );
+  }
+
+  return password;
+}
+
+const PASSWORD =
+  getRequiredTestAccountPassword();
 
 const TEST_USERS = [
   {
@@ -45,7 +59,7 @@ export async function seedUsers(prisma: PrismaClient) {
     },
   });
 
-  const passwordHash = await hash(PASSWORD, 12);
+  const passwordHash = await hashPassword(PASSWORD);
 
   for (const item of TEST_USERS) {
     const role = await prisma.role.findUnique({

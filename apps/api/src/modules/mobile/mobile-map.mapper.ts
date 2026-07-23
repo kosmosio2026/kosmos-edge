@@ -8,6 +8,7 @@ type LotWithStats = {
   centerLat: number | null;
   centerLng: number | null;
   isActive: boolean;
+  operationMode: string;
   _count?: {
     sections?: number;
   };
@@ -64,6 +65,7 @@ export function mapMobileOptimizedLots(params: {
     region: lot.region,
     district: lot.district,
     address: lot.address,
+    operationMode: lot.operationMode,
     lat: lot.centerLat,
     lng: lot.centerLng,
     summary: {

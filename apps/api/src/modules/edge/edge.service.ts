@@ -11,7 +11,13 @@ export class EdgeService {
         id: edgeNodeId,
       },
       include: {
-        tenant: true,
+        managementCompany: {
+          select: {
+            id: true,
+            name: true,
+            code: true,
+          },
+        },
         parkingLots: {
           include: {
             parkingLot: true,
@@ -40,12 +46,17 @@ export class EdgeService {
         code: edgeNode.code,
         name: edgeNode.name,
         status: edgeNode.status,
-        tenantId: edgeNode.tenantId,
-        tenantName: edgeNode.tenant?.name ?? null,
+        tenantId: null,
+        managementCompanyId: edgeNode.managementCompanyId ?? null,
+        managementCompanyName: edgeNode.managementCompany?.name ?? null,
+        managementCompanyCode: edgeNode.managementCompany?.code ?? null,
+        tenantName: null,
         parkingLots: edgeNode.parkingLots.map((link) => ({
           id: link.parkingLot.id,
           code: link.parkingLot.code,
           name: link.parkingLot.name,
+          operationMode: link.parkingLot.operationMode,
+          isActive: link.parkingLot.isActive,
         })),
       },
       serverTime: new Date().toISOString(),

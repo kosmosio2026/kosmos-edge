@@ -1,3 +1,4 @@
+import { isConnectedEdgeProfile } from '../config/app-mode';
 type EdgeParkingSessionEventType =
   | 'PARKING_SESSION_ENTERED_FROM_EDGE'
   | 'PARKING_SESSION_EXITED_FROM_EDGE';
@@ -11,15 +12,6 @@ type EdgeParkingSessionSyncInput = {
   sensorDeviceId?: string | null;
   devEui?: string | null;
 };
-
-function isEdgeMode() {
-  const profile =
-    process.env.APP_PROFILE ??
-    process.env.APP_MODE ??
-    '';
-
-  return profile.toLowerCase() === 'edge';
-}
 
 function asRecord(
   value: unknown,
@@ -60,10 +52,10 @@ export async function enqueueEdgeParkingSessionSync(
   prisma: any,
   input: EdgeParkingSessionSyncInput,
 ) {
-  if (!isEdgeMode()) {
+  if (!isConnectedEdgeProfile()) {
     return {
       created: false,
-      reason: 'NOT_EDGE_MODE',
+      reason: 'NOT_CONNECTED_EDGE_PROFILE',
     };
   }
 
@@ -364,10 +356,10 @@ export async function enqueueEdgeUnpaidExitSync(
   prisma: any,
   input: EdgeUnpaidExitSyncInput,
 ) {
-  if (!isEdgeMode()) {
+  if (!isConnectedEdgeProfile()) {
     return {
       created: false,
-      reason: 'NOT_EDGE_MODE',
+      reason: 'NOT_CONNECTED_EDGE_PROFILE',
     };
   }
 

@@ -59,6 +59,20 @@ export class PaymentsController {
     };
   }
 
+  @Public()
+  @Post('invoice/:invoiceId/toss/cancel')
+  cancelPublicTossPayment(
+    @Param('invoiceId') invoiceId: string,
+    @Body()
+    dto: {
+      code?: string | null;
+      orderId?: string | null;
+      reason?: string | null;
+    },
+  ) {
+    return this.paymentsService.cancelPublicTossPayment(invoiceId, dto);
+  }
+
   @Post('invoice/:invoiceId/create-pending')
   @UseGuards(JwtAuthGuard, PermissionGuard)
   @RequirePermission('payment.manage')

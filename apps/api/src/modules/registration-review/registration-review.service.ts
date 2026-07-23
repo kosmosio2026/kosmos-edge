@@ -1065,7 +1065,7 @@ export class RegistrationReviewService {
     if (tenantIds.length > 0) {
       const lots = await this.prisma.parkingLot.findMany({
         where: {
-          tenantId: { in: tenantIds },
+          managementCompanyId: { in: tenantIds },
         },
         select: {
           id: true,

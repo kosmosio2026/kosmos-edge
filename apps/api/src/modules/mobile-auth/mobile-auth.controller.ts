@@ -17,23 +17,6 @@ export class MobileAuthController {
     return this.mobileAuthService.memberLogin(body);
   }
 
-  // Member auth
-  @Post('mobile/member/signup')
-  async memberSignup(@Body() body: any) {
-    return this.mobileAuthService.memberSignup(body);
-  }
-
-  @Post('mobile/member/login')
-  async memberLogin(@Body() body: any) {
-    return this.mobileAuthService.memberLogin(body);
-  }
-
-  // Visitor auth
-  @Post('mobile/visitor/login')
-  async visitorLogin(@Body() body: any) {
-    return this.mobileAuthService.visitorLogin(body);
-  }
-
   @Get('mobile/member/me')
   @UseGuards(JwtAuthGuard)
   async memberMe(@Req() req: any) {

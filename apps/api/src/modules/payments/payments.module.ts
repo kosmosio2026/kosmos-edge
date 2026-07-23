@@ -5,6 +5,7 @@ import { PaymentsService } from './payments.service';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { RbacModule } from '../rbac/rbac.module';
 import { InvoicesModule } from '../invoices/invoices.module';
+import { TenantsModule } from '../tenants/tenants.module';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { InvoicesModule } from '../invoices/invoices.module';
     RealtimeModule,
     RbacModule,
     InvoicesModule,
+    TenantsModule,
   ],
   controllers: [PaymentsController],
   providers: [PaymentsService],

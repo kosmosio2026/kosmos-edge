@@ -45,6 +45,9 @@ type EdgeNodeItem = {
   name: string;
   tenantId: string | null;
   tenantName: string | null;
+  managementCompanyId?: string | null;
+  managementCompanyName?: string | null;
+  managementCompanyCode?: string | null;
   status: string;
   appVersion: string | null;
   lastSeenAt: string | null;
@@ -619,7 +622,7 @@ export default function AdminEdgeNodeDetailPage() {
             <div>Code: {item.code}</div>
             <div>Status: {item.status}</div>
             <div>Version: {item.appVersion ?? '-'}</div>
-            <div>Tenant: {item.tenantName ?? item.tenantId ?? '-'}</div>
+            <div>주차장운영사: {item.managementCompanyName ?? item.tenantName ?? '-'}</div>
             <div>Last Seen: {formatDate(item.lastSeenAt)}</div>
             <div>Last Sync: {formatDate(item.lastSyncAt)}</div>
           </div>

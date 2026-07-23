@@ -8,6 +8,9 @@ export const PERMISSIONS = {
   SESSION_MANAGE: 'session.manage',
   DEVICE_READ: 'device.read',
   DEVICE_MANAGE: 'device.manage',
+  DEVICE_FAULT_READ: 'device.fault.read',
+  DEVICE_FAULT_ACKNOWLEDGE: 'device.fault.acknowledge',
+  DEVICE_FAULT_RESOLVE: 'device.fault.resolve',
 
   BILLING_READ: 'billing.read',
   BILLING_MANAGE: 'billing.manage',
@@ -18,6 +21,10 @@ export const PERMISSIONS = {
   
   BILLING_DISCOUNT_READ: 'billing.discount.read',
   BILLING_DISCOUNT_MANAGE: 'billing.discount.manage',
+
+  TENANT_COUPON_READ: 'tenant.coupon.read',
+  TENANT_COUPON_MANAGE: 'tenant.coupon.manage',
+  TENANT_COUPON_ASSIGN: 'tenant.coupon.assign',
 
   PAYMENT_READ: 'payment.read',
   PAYMENT_MANAGE: 'payment.manage',

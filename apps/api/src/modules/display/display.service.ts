@@ -1,6 +1,17 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@parking/db';
 import { PrismaService } from '../../prisma/prisma.service';
+import type { AuthUser } from '../../common/types/auth-user.type';
+import {
+  isCloudProfile,
+  isConnectedEdgeProfile,
+} from '../../common/config/app-mode';
 import { UpdateDisplayBoardDto } from './dto/update-display-board.dto';
 import { UpdateDisplayLinesDto } from './dto/update-display-lines.dto';
 import { CreateDisplayCommandDto } from './dto/create-display-command.dto';
@@ -44,10 +55,42 @@ export class DisplayService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async listBoards(parkingLotId?: string) {
+  async listBoards(
+    parkingLotId: string | undefined,
+    user: AuthUser,
+  ) {
+    const isAdmin = user.roles?.some((role) =>
+      ['ADMIN', 'SUPER_ADMIN', 'SYSTEM_ADMIN'].includes(role),
+    );
+
+    const allowedParkingLotIds =
+      user.scopes?.parkingLotIds ?? [];
+
+    if (
+      !isAdmin &&
+      parkingLotId &&
+      !allowedParkingLotIds.includes(parkingLotId)
+    ) {
+      throw new ForbiddenException(
+        '해당 주차장의 전광판에 접근할 권한이 없습니다.',
+      );
+    }
+
+    if (!isAdmin && allowedParkingLotIds.length === 0) {
+      return [];
+    }
+
     return this.prisma.displayBoard.findMany({
       where: {
-        ...(parkingLotId ? { parkingLotId } : {}),
+        ...(parkingLotId
+          ? { parkingLotId }
+          : !isAdmin
+            ? {
+                parkingLotId: {
+                  in: allowedParkingLotIds,
+                },
+              }
+            : {}),
       },
       include: BOARD_INCLUDE,
       orderBy: [
@@ -82,13 +125,11 @@ export class DisplayService {
       throw new NotFoundException('Display board not found');
     }
 
-    return this.prisma.displayCommand.create({
-      data: {
-        displayBoardId: id,
-        type,
-        payload: payload as any,
-        requestedByUserId: userId,
-      },
+    return this.createDisplayCommandRecord({
+      displayBoardId: id,
+      type,
+      payload,
+      requestedByUserId: userId,
     });
   }
 
@@ -213,7 +254,12 @@ export class DisplayService {
       });
     }
 
-    return this.getBoard(id);
+    const updated =
+      await this.getBoard(id);
+
+    await this.enqueueDisplayConfigurationForEdge(id);
+
+    return updated;
   }
 
   async updateBoard(id: string, dto: UpdateDisplayBoardDto) {
@@ -256,11 +302,16 @@ export class DisplayService {
       ...(input.retryBackoffMs !== undefined ? { retryBackoffMs: input.retryBackoffMs } : {}),
     };
 
-    return this.prisma.displayBoard.update({
-      where: { id },
-      data,
-      include: BOARD_INCLUDE,
-    });
+    const updated =
+      await this.prisma.displayBoard.update({
+        where: { id },
+        data,
+        include: BOARD_INCLUDE,
+      });
+
+    await this.enqueueDisplayConfigurationForEdge(id);
+
+    return updated;
   }
 
   async updateLines(id: string, source: 'AUTO' | 'MANUAL', dto: UpdateDisplayLinesDto) {
@@ -317,7 +368,12 @@ export class DisplayService {
       }),
     );
 
-    return this.getBoard(id);
+    const updated =
+      await this.getBoard(id);
+
+    await this.enqueueDisplayConfigurationForEdge(id);
+
+    return updated;
   }
 
   async previewBoard(id: string) {
@@ -375,26 +431,22 @@ export class DisplayService {
   async createCommand(id: string, dto: CreateDisplayCommandDto, userId?: string) {
     await this.ensureBoard(id);
 
-    return this.prisma.displayCommand.create({
-      data: {
-        displayBoardId: id,
-        type: dto.type,
-        payload: (dto.payload ?? {}) as Prisma.InputJsonValue,
-        requestedByUserId: userId,
-      },
+    return this.createDisplayCommandRecord({
+      displayBoardId: id,
+      type: dto.type,
+      payload: dto.payload ?? {},
+      requestedByUserId: userId,
     });
   }
 
   async publish(id: string, userId?: string) {
     const preview = await this.previewBoard(id);
 
-    return this.prisma.displayCommand.create({
-      data: {
-        displayBoardId: id,
-        type: 'PUBLISH',
-        payload: preview as unknown as Prisma.InputJsonValue,
-        requestedByUserId: userId,
-      },
+    return this.createDisplayCommandRecord({
+      displayBoardId: id,
+      type: 'PUBLISH',
+      payload: preview,
+      requestedByUserId: userId,
     });
   }
 
@@ -415,6 +467,8 @@ export class DisplayService {
         manualReason: reason ?? null,
       },
     });
+
+    await this.enqueueDisplayConfigurationForEdge(id);
 
     const preview = await this.previewBoard(id);
     const requestedByLineNo = new Map<number, any>(
@@ -456,13 +510,11 @@ export class DisplayService {
       }),
     };
 
-    return this.prisma.displayCommand.create({
-      data: {
-        displayBoardId: id,
-        type: 'PUBLISH',
-        payload: payload as unknown as Prisma.InputJsonValue,
-        requestedByUserId: userId,
-      },
+    return this.createDisplayCommandRecord({
+      displayBoardId: id,
+      type: 'PUBLISH',
+      payload,
+      requestedByUserId: userId,
     });
   }
 
@@ -477,6 +529,8 @@ export class DisplayService {
         manualExpiresAt: null,
       },
     });
+
+    await this.enqueueDisplayConfigurationForEdge(id);
 
     return this.publish(id, userId);
   }
@@ -570,7 +624,445 @@ export class DisplayService {
       });
     }
 
+    await this.enqueueDisplayCommandResultForCloud({
+      command,
+      updated,
+    });
+
     return updated;
+  }
+
+  private async createDisplayCommandRecord(input: {
+    displayBoardId: string;
+    type: string;
+    payload: unknown;
+    requestedByUserId?: string;
+  }) {
+    const command =
+      await this.prisma.displayCommand.create({
+        data: {
+          displayBoardId:
+            input.displayBoardId,
+          type:
+            input.type,
+          payload:
+            (input.payload ?? {}) as Prisma.InputJsonValue,
+          requestedByUserId:
+            input.requestedByUserId,
+        },
+      });
+
+    await this.enqueueDisplayCommandForEdge(
+      command.id,
+    );
+
+    return command;
+  }
+
+  private async resolveDisplayEdgeTargets(
+    parkingLotId: string,
+  ) {
+    if (!isCloudProfile()) {
+      return [];
+    }
+
+    const links =
+      await this.prisma.edgeParkingLot.findMany({
+        where: {
+          parkingLotId,
+        },
+        select: {
+          edgeNodeId: true,
+        },
+      });
+
+    return Array.from(
+      new Set(
+        links.map(
+          (link) => link.edgeNodeId,
+        ),
+      ),
+    );
+  }
+
+  private async enqueueDisplayConfigurationForEdge(
+    displayBoardId: string,
+  ) {
+    if (!isCloudProfile()) {
+      return [];
+    }
+
+    const board =
+      await this.getBoard(displayBoardId);
+
+    const targets =
+      await this.resolveDisplayEdgeTargets(
+        board.parkingLotId,
+      );
+
+    if (targets.length === 0) {
+      return [];
+    }
+
+    const raw = board as any;
+
+    const payload = {
+      displayBoardId:
+        board.id,
+      parkingLotId:
+        board.parkingLotId,
+
+      board: {
+        id:
+          board.id,
+        parkingLotId:
+          board.parkingLotId,
+        code:
+          board.code,
+        name:
+          board.name,
+        deviceId:
+          raw.deviceId ?? null,
+        macAddress:
+          raw.macAddress ?? null,
+        enabled:
+          board.enabled,
+
+        transport:
+          raw.transport ?? 'TCP',
+        tcpHost:
+          raw.tcpHost ?? null,
+        tcpPort:
+          raw.tcpPort ?? null,
+
+        serialPort:
+          raw.serialPort ?? null,
+        baudRate:
+          raw.baudRate ?? null,
+        dataBits:
+          raw.dataBits ?? null,
+        parity:
+          raw.parity ?? null,
+        stopBits:
+          raw.stopBits ?? null,
+
+        connectTimeoutMs:
+          raw.connectTimeoutMs ?? null,
+        readTimeoutMs:
+          raw.readTimeoutMs ?? null,
+
+        rows:
+          raw.rows ?? 1,
+        cols:
+          raw.cols ?? 4,
+        moduleType:
+          raw.moduleType ?? null,
+        rgbOrder:
+          raw.rgbOrder ?? null,
+
+        brightness:
+          raw.brightness ?? null,
+        powerOn:
+          raw.powerOn ?? true,
+
+        heartbeatIntervalSec:
+          raw.heartbeatIntervalSec ?? null,
+        retryMaxAttempts:
+          raw.retryMaxAttempts ?? null,
+        retryBackoffMs:
+          raw.retryBackoffMs ?? null,
+
+        mode:
+          raw.mode ?? 'AUTO',
+        manualReason:
+          raw.manualReason ?? null,
+        manualExpiresAt:
+          raw.manualExpiresAt
+            ? new Date(
+                raw.manualExpiresAt,
+              ).toISOString()
+            : null,
+      },
+
+      lines:
+        (board.lines ?? []).map(
+          (line: any) => ({
+            source:
+              line.source,
+            lineNo:
+              line.lineNo,
+            textTemplate:
+              line.textTemplate,
+            enabled:
+              line.enabled,
+            fontSize:
+              line.fontSize,
+            effect:
+              line.effect,
+            speed:
+              line.speed,
+            delay:
+              line.delay,
+            neon:
+              line.neon,
+            fix:
+              line.fix,
+            colorCode:
+              line.colorCode,
+            fontCode:
+              line.fontCode,
+            widthCode:
+              line.widthCode,
+            attributeCode:
+              line.attributeCode,
+            iconCode:
+              line.iconCode,
+          }),
+        ),
+
+      modules:
+        (board.modules ?? []).map(
+          (module: any) => ({
+            rowNo:
+              module.rowNo,
+            colNo:
+              module.colNo,
+            parkingSectionId:
+              module.parkingSectionId,
+            label:
+              module.label,
+            enabled:
+              module.enabled,
+            charWidth:
+              module.charWidth,
+            padChar:
+              module.padChar,
+          }),
+        ),
+
+      occurredAt:
+        new Date().toISOString(),
+    };
+
+    return Promise.all(
+      targets.map(
+        async (edgeNodeId) => {
+          return this.prisma.domainEvent.create({
+            data: {
+              eventId:
+                randomUUID(),
+              aggregateType:
+                'DisplayBoard',
+              aggregateId:
+                board.id,
+              eventType:
+                'DISPLAY_BOARD_CONFIGURATION_UPDATED_FROM_CLOUD',
+              payload: {
+                ...payload,
+                edgeNodeId,
+                destination:
+                  `EDGE:${edgeNodeId}`,
+                createdForEdgeSync:
+                  true,
+              } as any,
+              occurredAt:
+                new Date(),
+              outboxes: {
+                create: {
+                  destination:
+                    `EDGE:${edgeNodeId}`,
+                  status:
+                    'PENDING',
+                },
+              },
+            },
+          });
+        },
+      ),
+    );
+  }
+
+  private async enqueueDisplayCommandForEdge(
+    displayCommandId: string,
+  ) {
+    if (!isCloudProfile()) {
+      return [];
+    }
+
+    const command =
+      await this.prisma.displayCommand.findUnique({
+        where: {
+          id:
+            displayCommandId,
+        },
+        include: {
+          displayBoard: true,
+        },
+      });
+
+    if (!command) {
+      throw new NotFoundException(
+        'Display command not found',
+      );
+    }
+
+    const targets =
+      await this.resolveDisplayEdgeTargets(
+        command.displayBoard.parkingLotId,
+      );
+
+    if (targets.length === 0) {
+      return [];
+    }
+
+    return Promise.all(
+      targets.map(
+        async (edgeNodeId) => {
+          return this.prisma.domainEvent.create({
+            data: {
+              eventId:
+                randomUUID(),
+              aggregateType:
+                'DisplayCommand',
+              aggregateId:
+                command.id,
+              eventType:
+                'DISPLAY_COMMAND_REQUESTED_FROM_CLOUD',
+              payload: {
+                edgeNodeId,
+                cloudCommandId:
+                  command.id,
+                displayBoardId:
+                  command.displayBoardId,
+                parkingLotId:
+                  command.displayBoard.parkingLotId,
+                type:
+                  command.type,
+                commandPayload:
+                  command.payload,
+                requestedAt:
+                  command.requestedAt.toISOString(),
+                destination:
+                  `EDGE:${edgeNodeId}`,
+                createdForEdgeSync:
+                  true,
+              } as any,
+              occurredAt:
+                command.requestedAt,
+              outboxes: {
+                create: {
+                  destination:
+                    `EDGE:${edgeNodeId}`,
+                  status:
+                    'PENDING',
+                },
+              },
+            },
+          });
+        },
+      ),
+    );
+  }
+
+  private async enqueueDisplayCommandResultForCloud(
+    input: {
+      command: any;
+      updated: any;
+    },
+  ) {
+    if (!isConnectedEdgeProfile()) {
+      return null;
+    }
+
+    const commandPayload =
+      input.command?.payload &&
+      typeof input.command.payload ===
+        'object' &&
+      !Array.isArray(
+        input.command.payload,
+      )
+        ? input.command.payload as Record<
+            string,
+            unknown
+          >
+        : {};
+
+    const cloudCommandId =
+      typeof commandPayload.cloudCommandId ===
+        'string'
+        ? commandPayload.cloudCommandId
+        : null;
+
+    if (!cloudCommandId) {
+      return null;
+    }
+
+    const occurredAt =
+      new Date();
+
+    return this.prisma.domainEvent.create({
+      data: {
+        eventId:
+          randomUUID(),
+        aggregateType:
+          'DisplayCommand',
+        aggregateId:
+          cloudCommandId,
+        eventType:
+          'DISPLAY_COMMAND_RESULT_FROM_EDGE',
+        payload: {
+          edgeNodeId:
+            process.env.EDGE_NODE_ID ??
+            null,
+          cloudCommandId,
+          edgeCommandId:
+            input.updated.id,
+          displayBoardId:
+            input.updated.displayBoardId,
+          status:
+            input.updated.status,
+          packetHex:
+            input.updated.packetHex ??
+            null,
+          responseHex:
+            input.updated.responseHex ??
+            null,
+          errorMessage:
+            input.updated.errorMessage ??
+            null,
+          attempts:
+            input.updated.attempts ??
+            0,
+          processingAt:
+            input.updated.processingAt
+              ?.toISOString?.() ??
+            null,
+          sentAt:
+            input.updated.sentAt
+              ?.toISOString?.() ??
+            null,
+          ackedAt:
+            input.updated.ackedAt
+              ?.toISOString?.() ??
+            null,
+          failedAt:
+            input.updated.failedAt
+              ?.toISOString?.() ??
+            null,
+          occurredAt:
+            occurredAt.toISOString(),
+        } as any,
+        occurredAt,
+        outboxes: {
+          create: {
+            destination:
+              'CLOUD',
+            status:
+              'PENDING',
+          },
+        },
+      },
+    });
   }
 
   private async ensureBoard(id: string) {

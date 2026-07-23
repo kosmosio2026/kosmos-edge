@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import { AppProviders } from '@/components/providers/app-providers';
 
 export const metadata: Metadata = {
-  title: 'Smart Parking Platform',
+  title: 'KOSMOS 스마트 주차관제 플랫폼',
   description: 'Edge-first smart parking platform',
 };
 

@@ -10,7 +10,7 @@ export NODE_ENV=production
 export DATABASE_URL="postgresql://postgres:postgres@localhost:5434/parking_cloud?schema=public"
 export JWT_SECRET="${JWT_SECRET:-dev-secret}"
 export JWT_EXPIRES_IN="${JWT_EXPIRES_IN:-7d}"
-export CORS_ORIGIN="${CORS_ORIGIN:-http://172.30.1.95:4000,http://localhost:4000}"
+export CORS_ORIGIN="${CORS_ORIGIN:-http://112.171.47.68:4000,http://localhost:4000}"
 
 pnpm --filter @parking/api build
 

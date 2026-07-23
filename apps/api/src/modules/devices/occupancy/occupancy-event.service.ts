@@ -13,7 +13,7 @@ export class OccupancyEventService {
   ) {}
 
   async handleParkingSensorStatus(devEui: string, parkingStatus: number) {
-    const normalizedDevEui = devEui.toLowerCase();
+    const normalizedDevEui = devEui.trim().replace(/[\s:-]/g, '').toUpperCase();
 
     const sensorDevice = await this.prisma.sensorDevice.findUnique({
       where: {

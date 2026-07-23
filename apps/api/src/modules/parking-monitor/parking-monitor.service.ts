@@ -10,6 +10,7 @@ type ParkingMapSpaceState =
   | 'OCCUPIED_UNREGISTERED'
   | 'UNREGISTERED_OVERDUE'
   | 'PAYMENT_GRACE_EXPIRED'
+  | 'TENANT_VISIT_GRACE'
   | 'LONG_PARKING_ALERT'
   | 'EXITED_UNPAID'
   | 'DISABLED'
@@ -17,6 +18,7 @@ type ParkingMapSpaceState =
   | 'UNKNOWN';
 
 const ACTIVE_SESSION_STATUSES = ['ACTIVE', 'GRACE_PERIOD', 'CREATED'];
+const LIVE_SESSION_STATUSES = ['ACTIVE', 'GRACE_PERIOD', 'CREATED', 'PAID'];
 
 function getUserRoles(user?: AuthUser | null): string[] {
   const raw = (user as any)?.roles ?? (user as any)?.role ?? [];
@@ -48,16 +50,53 @@ export class ParkingMonitorService {
   ) {}
 
   private async getManagerParkingLotIds(userId: string) {
-    const rows = await this.prisma.managerParkingLot.findMany({
-      where: {
-        managerProfileUserId: userId,
-      },
-      select: {
-        parkingLotId: true,
-      },
-    });
+    const [directRows, user, managerProfile] = await Promise.all([
+      this.prisma.managerParkingLot.findMany({
+        where: {
+          managerProfileUserId: userId,
+        },
+        select: {
+          parkingLotId: true,
+        },
+      }),
+      this.prisma.user.findUnique({
+        where: {
+          id: userId,
+        },
+        select: {
+          managementCompanyId: true,
+        },
+      }),
+      this.prisma.managerProfile.findFirst({
+        where: {
+          userId,
+        },
+        select: {
+          managementCompanyId: true,
+        },
+      }),
+    ]);
 
-    return rows.map((row) => row.parkingLotId);
+    const managementCompanyId =
+      user?.managementCompanyId ?? managerProfile?.managementCompanyId ?? null;
+
+    const companyParkingLots = managementCompanyId
+      ? await this.prisma.parkingLot.findMany({
+          where: {
+            managementCompanyId,
+          },
+          select: {
+            id: true,
+          },
+        })
+      : [];
+
+    return Array.from(
+      new Set([
+        ...directRows.map((row) => row.parkingLotId),
+        ...companyParkingLots.map((parkingLot) => parkingLot.id),
+      ]),
+    );
   }
 
   private async getOperatorParkingSectionIds(userId: string) {
@@ -479,7 +518,7 @@ export class ParkingMonitorService {
           in: spaceIds,
         },
         status: {
-          in: ACTIVE_SESSION_STATUSES as any,
+          in: LIVE_SESSION_STATUSES as any,
         },
       },
       orderBy: {
@@ -499,6 +538,34 @@ export class ParkingMonitorService {
       },
       take: 500,
     });
+
+    const visitTenantIds = Array.from(
+      new Set(
+        activeSessions
+          .map((session: any) => session.visitTenantId)
+          .filter((id: unknown): id is string => typeof id === 'string' && id.length > 0),
+      ),
+    );
+
+    const visitTenants =
+      visitTenantIds.length > 0
+        ? await this.prisma.tenant.findMany({
+            where: {
+              id: {
+                in: visitTenantIds,
+              },
+            },
+            select: {
+              id: true,
+              name: true,
+              code: true,
+            },
+          })
+        : [];
+
+    const visitTenantById = new Map(
+      visitTenants.map((tenant) => [tenant.id, tenant]),
+    );
 
     const activeSessionBySpaceId = new Map<string, typeof activeSessions[number]>();
     for (const session of activeSessions) {
@@ -561,27 +628,97 @@ export class ParkingMonitorService {
           (activeMetadata.longParkingAlert === true ||
             this.isLongParkingByEntryTime(activeSession.entryTime));
 
+        const tenantGraceUntilRaw = (activeSession as any)?.tenantGraceUntil ?? null;
+        const tenantGraceUntilDate = tenantGraceUntilRaw
+          ? new Date(tenantGraceUntilRaw as any)
+          : null;
+        const hasValidTenantGraceUntil =
+          tenantGraceUntilDate != null &&
+          !Number.isNaN(tenantGraceUntilDate.getTime());
+
+        const tenantVisitConfirmed =
+          activeSession != null &&
+          String((activeSession as any).status).toUpperCase() === 'PAID' &&
+          (activeSession as any).exitTime == null &&
+          typeof (activeSession as any).visitTenantId === 'string' &&
+          (activeSession as any).visitTenantId.length > 0;
+
+        const tenantVisitGraceExpired =
+          tenantVisitConfirmed &&
+          hasValidTenantGraceUntil &&
+          tenantGraceUntilDate.getTime() < now.getTime();
+
+        const tenantVisitGraceActive =
+          tenantVisitConfirmed &&
+          hasValidTenantGraceUntil &&
+          tenantGraceUntilDate.getTime() >= now.getTime();
+
+        const visitTenant =
+          typeof (activeSession as any)?.visitTenantId === 'string'
+            ? visitTenantById.get((activeSession as any).visitTenantId) ?? null
+            : null;
+
+        const tenantAwareMetadata = activeSession
+          ? {
+              ...effectiveMetadata,
+              tenantVisitGraceActive,
+              paymentGraceExpired:
+                tenantVisitGraceExpired ||
+                effectiveMetadata.paymentGraceExpired === true,
+              additionalFeeRequired:
+                tenantVisitGraceExpired ||
+                effectiveMetadata.additionalFeeRequired === true,
+              paymentReason: tenantVisitGraceExpired
+                ? 'PAID_GRACE_EXPIRED_STILL_OCCUPIED'
+                : tenantVisitGraceActive
+                  ? 'TENANT_VISIT_GRACE'
+                  : effectiveMetadata.paymentReason,
+            }
+          : effectiveMetadata;
+
         const state = this.resolveSpaceState({
           spaceStatus: space.status,
           isActive: space.isActive,
           activeSession,
           unpaidClosedSession,
-          metadata: effectiveMetadata,
+          metadata: tenantAwareMetadata,
           sensorStatus: sensor?.status ?? null,
         });
 
         const derivedPaymentStatus = activeSession
-          ? this.resolveActivePaymentStatus({
-              metadata: activeMetadata,
-              isRegistered: activeSession.isRegistered,
-              accruedFeeAmount: accruedFee?.amount ?? null,
-              longParkingAlert,
-            })
+          ? tenantVisitGraceExpired
+            ? 'PAID_EXIT_PENDING'
+            : tenantVisitGraceActive
+              ? 'TENANT_VISIT_GRACE'
+              : this.resolveActivePaymentStatus({
+                  metadata: activeMetadata,
+                  isRegistered: activeSession.isRegistered,
+                  accruedFeeAmount: accruedFee?.amount ?? null,
+                  longParkingAlert,
+                })
+          : null;
+
+        const derivedPaymentReason = activeSession
+          ? tenantVisitGraceExpired
+            ? 'PAID_GRACE_EXPIRED_STILL_OCCUPIED'
+            : tenantVisitGraceActive
+              ? 'TENANT_VISIT_GRACE'
+              : activeMetadata.paymentReason ?? null
+          : null;
+
+        const derivedDisplayStatus = activeSession
+          ? tenantVisitGraceExpired
+            ? '결제 후 미출차'
+            : tenantVisitGraceActive
+              ? '방문 확인/출차 유예 중'
+              : null
           : null;
 
         return {
           parkingLotId: section?.parkingLotId ?? null,
           parkingLotName: parkingLot?.name ?? null,
+          parkingLotCode: parkingLot?.code ?? null,
+          parkingLotOperationMode: (parkingLot as any)?.operationMode ?? 'SENSOR',
           sectionId: space.sectionId,
           sectionCode: section?.code ?? null,
           spaceId: space.id,
@@ -612,6 +749,11 @@ export class ParkingMonitorService {
                 sessionNo: activeSession.sessionNo,
                 status: activeSession.status,
                 entryTime: activeSession.entryTime,
+                exitTime: (activeSession as any).exitTime ?? null,
+                entrySource: (activeSession as any).entrySource ?? 'SENSOR',
+                exitSource: (activeSession as any).exitSource ?? null,
+                manualEntryAt: (activeSession as any).manualEntryAt ?? null,
+                manualExitAt: (activeSession as any).manualExitAt ?? null,
                 isRegistered: activeSession.isRegistered,
                 registrationStatus: activeSession.registrationStatus,
                 registrationMethod: activeSession.registrationMethod,
@@ -622,14 +764,26 @@ export class ParkingMonitorService {
                 accruedFeeCalculatedAt: accruedFee?.calculatedAt ?? null,
                 accruedFeePolicyId: accruedFee?.policyId ?? null,
                 paymentStatus: derivedPaymentStatus,
+                paymentReason: derivedPaymentReason,
+                displayStatus: derivedDisplayStatus,
+                visitTenantId: (activeSession as any).visitTenantId ?? null,
+                visitTenantName: visitTenant?.name ?? null,
+                visitTenantCode: visitTenant?.code ?? null,
+                tenantConfirmedAt: (activeSession as any).tenantConfirmedAt ?? null,
+                tenantGraceUntil: (activeSession as any).tenantGraceUntil ?? null,
+                tenantGraceExpired: tenantVisitGraceExpired,
+                tenantCoveredAmount: (activeSession as any).tenantCoveredAmount ?? 0,
+                tenantVisitConfirmedBy:
+                  (activeSession as any).tenantVisitConfirmedBy ?? null,
                 longParkingAlert,
                 unregisteredOverdue:
                   activeMetadata.unregisteredOverdue === true,
                 paymentGraceExpired:
+                  tenantVisitGraceExpired ||
                   activeMetadata.paymentGraceExpired === true,
                 additionalFeeRequired:
+                  tenantVisitGraceExpired ||
                   activeMetadata.additionalFeeRequired === true,
-                paymentReason: activeMetadata.paymentReason ?? null,
               }
             : null,
           unpaidClosedSession: unpaidClosedSession
@@ -639,6 +793,10 @@ export class ParkingMonitorService {
                 status: unpaidClosedSession.status,
                 entryTime: unpaidClosedSession.entryTime,
                 exitTime: unpaidClosedSession.exitTime,
+                entrySource: (unpaidClosedSession as any).entrySource ?? 'SENSOR',
+                exitSource: (unpaidClosedSession as any).exitSource ?? null,
+                manualEntryAt: (unpaidClosedSession as any).manualEntryAt ?? null,
+                manualExitAt: (unpaidClosedSession as any).manualExitAt ?? null,
                 paymentStatus: unpaidMetadata.paymentStatus ?? 'UNPAID',
                 additionalFeeRequired:
                   unpaidMetadata.additionalFeeRequired === true,
@@ -695,6 +853,10 @@ export class ParkingMonitorService {
     }
 
     if (input.activeSession) {
+      if (input.metadata.tenantVisitGraceActive === true) {
+        return 'TENANT_VISIT_GRACE';
+      }
+
       if (input.metadata.paymentGraceExpired === true) {
         return 'PAYMENT_GRACE_EXPIRED';
       }
@@ -741,6 +903,8 @@ export class ParkingMonitorService {
         return '#ef4444';
       case 'PAYMENT_GRACE_EXPIRED':
         return '#be123c';
+      case 'TENANT_VISIT_GRACE':
+        return '#0ea5e9';
       case 'LONG_PARKING_ALERT':
         return '#7c3aed';
       case 'EXITED_UNPAID':

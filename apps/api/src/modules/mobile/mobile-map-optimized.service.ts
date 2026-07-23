@@ -10,11 +10,13 @@ export class MobileMapOptimizedService {
     const spaces = await this.prisma.parkingSpace.findMany({
       where: {
         isActive: true,
-        section: parkingLotId
-          ? {
-              parkingLotId,
-            }
-          : undefined,
+        section: {
+          ...(parkingLotId ? { parkingLotId } : {}),
+          parkingLot: {
+            isActive: true,
+            operationMode: 'SENSOR',
+          },
+        },
       },
       select: {
         id: true,

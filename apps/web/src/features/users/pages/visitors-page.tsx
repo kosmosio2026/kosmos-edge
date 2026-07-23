@@ -47,6 +47,7 @@ export default function VisitorsPage({ role = 'admin' }: Props) {
   const [items, setItems] = useState<VisitorItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<VisitorItem | null>(null);
 
   const query = useMemo(
     () => parseTableQueryFromSearchParams(searchParams),
@@ -133,8 +134,7 @@ export default function VisitorsPage({ role = 'admin' }: Props) {
               <th className="px-5 py-3">번호</th>
               <th className="px-5 py-3">이름</th>
               <th className="px-5 py-3">전화번호</th>
-              <th className="px-5 py-3">Vehicle</th>
-              <th className="px-5 py-3">Created</th>
+              <th className="px-5 py-3">차량 번호</th>
             </tr>
           </thead>
 
@@ -148,21 +148,28 @@ export default function VisitorsPage({ role = 'admin' }: Props) {
                     index,
                   })}
                 </td>
-                <td className="px-5 py-3">{item.name ?? '-'}</td>
+                <td className="px-5 py-3">
+                  <button
+                    type="button"
+                    onClick={() => setSelected(item)}
+                    className="font-bold text-blue-700 hover:underline"
+                  >
+                    {item.name ?? '-'}
+                  </button>
+                </td>
                 <td className="px-5 py-3">
                   {item.visitorProfile?.phone ?? item.phone ?? '-'}
                 </td>
                 <td className="px-5 py-3">
                   {item.visitorProfile?.vehicleNo ?? item.plateNumber ?? '-'}
                 </td>
-                <td className="px-5 py-3">{formatDate(item.createdAt)}</td>
               </tr>
             ))}
 
             {!loading && filteredItems.length === 0 ? (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={4}
                   className="px-5 py-10 text-center text-slate-500"
                 >
                   방문객이 없습니다.
@@ -174,6 +181,48 @@ export default function VisitorsPage({ role = 'admin' }: Props) {
       </div>
 
       <PaginationBar meta={meta} />
+
+      {selected ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <section className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-black uppercase tracking-[0.2em] text-blue-600">
+                  Visitor Detail
+                </p>
+                <h2 className="mt-2 text-2xl font-black text-slate-950">방문객 상세 정보</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelected(null)}
+                className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-bold text-slate-700"
+              >
+                닫기
+              </button>
+            </div>
+
+            <div className="mt-5 overflow-hidden rounded-2xl border">
+              <table className="w-full text-sm">
+                <tbody>
+                  {[
+                    ['이름', selected.name ?? '-'],
+                    ['전화번호', selected.visitorProfile?.phone ?? selected.phone ?? '-'],
+                    ['차량 번호', selected.visitorProfile?.vehicleNo ?? selected.plateNumber ?? '-'],
+                    ['생성일시', formatDate(selected.createdAt)],
+                  ].map(([label, value]) => (
+                    <tr key={label} className="border-b last:border-b-0">
+                      <th className="w-40 bg-slate-50 px-4 py-3 text-left font-black text-slate-600">
+                        {label}
+                      </th>
+                      <td className="px-4 py-3 text-slate-900">{value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }

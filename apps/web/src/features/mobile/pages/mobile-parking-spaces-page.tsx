@@ -186,7 +186,7 @@ export default function MobileParkingSpacesPage({
       setMessage('');
 
       try {
-        const res = await fetch(`${API_BASE}/public/parking-lots`, {
+        const res = await fetch(`${API_BASE}/public/parking-lots?operationMode=SENSOR`, {
           cache: 'no-store',
         });
         const lotsJson = await res.json();

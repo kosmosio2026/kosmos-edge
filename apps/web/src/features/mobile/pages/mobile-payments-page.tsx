@@ -273,7 +273,18 @@ export default function MobilePaymentsPage() {
         throw new Error(data?.message ?? '청구서를 생성하지 못했습니다.');
       }
 
-      setMessage(data?.invoice?.metadata?.invoiceTitle === '추가 요금 청구서' ? '추가 요금 청구서가 생성되었습니다.' : '청구서가 생성/갱신되었습니다.');
+      const invoiceId = data?.invoice?.id;
+
+      if (invoiceId) {
+        window.location.href = `/pay/invoice/${invoiceId}`;
+        return;
+      }
+
+      setMessage(
+        data?.invoice?.metadata?.invoiceTitle === '추가 요금 청구서'
+          ? '추가 요금 청구서가 생성되었습니다.'
+          : '청구서가 생성/갱신되었습니다.',
+      );
       await loadPayments();
     } catch (error: any) {
       setMessage(error?.message ?? '청구서를 생성하지 못했습니다.');
@@ -303,35 +314,14 @@ export default function MobilePaymentsPage() {
     >
       <div className="mx-auto max-w-md">
         <section className="rounded-[2rem] bg-white p-5 shadow-2xl">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.25em] text-blue-600">
-                PAYMENTS
-              </p>
-              <h1 className="mt-2 text-2xl font-black text-slate-950">
-                결제/영수증
-              </h1>
-              <p className="mt-2 text-sm text-slate-500">
-                주차 요금, 결제 상태, 영수증 정보를 확인합니다.
-              </p>
-            </div>
-
-            <a
-              href="/mobile"
-              className="rounded-full bg-slate-100 px-3 py-2 text-xs font-black text-slate-600"
-            >
-              홈
-            </a>
-          </div>
-
-          <div className="mt-5">
+          <div>
             <button
               type="button"
               onClick={finalizeCurrentInvoice}
               disabled={saving}
               className="w-full rounded-2xl bg-blue-600 px-5 py-4 text-center text-base font-black text-white shadow-lg shadow-blue-600/20 disabled:opacity-50"
             >
-              {saving ? '청구서 생성 중...' : '현재 주차 청구서 생성/갱신'}
+              {saving ? '청구서 확정 중...' : '현재 주차 요금 확인/결제'}
             </button>
           </div>
 
@@ -419,7 +409,37 @@ export default function MobilePaymentsPage() {
 
                   <div className="mt-3 rounded-2xl bg-white p-3">
                     <div className="flex justify-between text-sm">
-                      <span className="font-bold text-slate-400">청구 금액</span>
+                      <span className="font-bold text-slate-400">기본 주차요금</span>
+                      <span className="font-black text-slate-900">
+                        {formatMoney(
+                          item.invoice?.baseParkingAmount ??
+                            item.invoice?.metadata?.baseParkingAmount ??
+                            item.invoice?.amount,
+                        )}
+                      </span>
+                    </div>
+                    {Number(item.invoice?.metadata?.automaticDiscountAmount ?? 0) > 0 ? (
+                      <div className="mt-1 flex justify-between text-sm">
+                        <span className="font-bold text-slate-400">자동 할인</span>
+                        <span className="font-black text-blue-700">
+                          -{formatMoney(item.invoice.metadata.automaticDiscountAmount)}
+                        </span>
+                      </div>
+                    ) : null}
+                    {Number(item.invoice?.metadata?.tenantCouponDiscountAmount ?? 0) > 0 ? (
+                      <div className="mt-1 flex justify-between gap-3 text-sm">
+                        <span className="font-bold text-violet-600">
+                          {item.invoice?.metadata?.tenantCoupon?.tenantName
+                            ? `${item.invoice.metadata.tenantCoupon.tenantName} 할인권`
+                            : 'Tenant 할인권'}
+                        </span>
+                        <span className="shrink-0 font-black text-violet-700">
+                          -{formatMoney(item.invoice.metadata.tenantCouponDiscountAmount)}
+                        </span>
+                      </div>
+                    ) : null}
+                    <div className="mt-2 flex justify-between border-t border-slate-100 pt-2 text-sm">
+                      <span className="font-bold text-slate-500">최종 청구금액</span>
                       <span className="font-black text-slate-900">
                         {formatMoney(item.invoice?.finalAmount ?? item.invoice?.amount)}
                       </span>

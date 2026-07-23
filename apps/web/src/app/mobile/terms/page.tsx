@@ -1,5 +1,5 @@
-import { redirect } from 'next/navigation';
+import { MobileLegalPage } from '@/features/mobile/pages/mobile-legal-page';
 
-export default function MobileTermsRedirectPage() {
-  redirect('/terms');
+export default function MobileTermsPage() {
+  return <MobileLegalPage kind="terms" />;
 }

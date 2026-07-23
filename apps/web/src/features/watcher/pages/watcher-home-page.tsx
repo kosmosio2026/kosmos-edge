@@ -3,14 +3,15 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { API_BASE, apiFetch, clearToken, getToken } from './watcher-utils';
+import WatcherEnforcementAlertBanner from './watcher-enforcement-alert-banner';
 
 export default function WatcherHomePage() {
   const [mode, setMode] = useState<'login' | 'register'>('login');
 
-  const [email, setEmail] = useState('watcher@kosmos.test');
-  const [password, setPassword] = useState('kosmos2026!!');
-  const [name, setName] = useState('Watcher Test');
-  const [phone, setPhone] = useState('01077778888');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
 
   const [message, setMessage] = useState<string | null>(null);
   const [tokenSaved, setTokenSaved] = useState(false);
@@ -218,6 +219,8 @@ export default function WatcherHomePage() {
         )}
 
         <div className="mt-5 grid grid-cols-1 gap-3">
+          <WatcherEnforcementAlertBanner />
+
           <Link href="/watcher/apply" className="rounded-3xl bg-white p-5 font-bold shadow-sm">
             Watcher 신청하기
             <p className="mt-1 text-sm font-normal text-slate-500">

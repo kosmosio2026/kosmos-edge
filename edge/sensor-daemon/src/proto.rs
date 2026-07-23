@@ -273,9 +273,9 @@ pub fn parse_packet(buf: &[u8]) -> Result<ParsedPacket> {
     }
 
     match DeviceType::from_u8(buf[0]) {
-        DeviceType::KosmosTracker => {
-            Ok(ParsedPacket::KosmosTracker(parse_kosmos_tracker_packet(buf)?))
-        }
+        DeviceType::KosmosTracker => Ok(ParsedPacket::KosmosTracker(parse_kosmos_tracker_packet(
+            buf,
+        )?)),
         other => Err(anyhow!("Unknown device type: {:?}", other)),
     }
 }

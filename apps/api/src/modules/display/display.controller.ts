@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { DisplayService } from './display.service';
+import { DisplayBoardScopeGuard } from './display-board-scope.guard';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../common/guards/permission.guard';
 import { RequirePermission } from '../../common/decorators/require-permission.decorator';
@@ -16,38 +17,50 @@ export class DisplayController {
   constructor(private readonly displayService: DisplayService) {}
 
   @Get('boards')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_READ)
-  listBoards(@Query('parkingLotId') parkingLotId?: string) {
-    return this.displayService.listBoards(parkingLotId);
+  listBoards(
+    @Query('parkingLotId') parkingLotId: string | undefined,
+    @Req() req: any,
+  ) {
+    return this.displayService.listBoards(
+      parkingLotId,
+      req.user,
+    );
   }
 
   // Legacy compatibility for existing admin dashboard/display pages.
   // New model uses display boards, but older web code calls /display/controllers.
   @Get('controllers')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_READ)
-  getLegacyControllers(@Query('parkingLotId') parkingLotId?: string) {
-    return this.displayService.listBoards(parkingLotId);
+  getLegacyControllers(
+    @Query('parkingLotId') parkingLotId: string | undefined,
+    @Req() req: any,
+  ) {
+    return this.displayService.listBoards(
+      parkingLotId,
+      req.user,
+    );
   }
 
 
   @Get('boards/:id')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_READ)
   getBoard(@Param('id') id: string) {
     return this.displayService.getBoard(id);
   }
 
   @Get('boards/:id/preview')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_READ)
   previewBoard(@Param('id') id: string) {
     return this.displayService.previewBoard(id);
   }
 
   @Post('boards/:id/commands/brightness')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_COMMAND)
   sendBrightnessCommand(
     @Param('id') id: string,
@@ -58,7 +71,7 @@ export class DisplayController {
   }
 
   @Post('boards/:id/commands/power')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_COMMAND)
   sendPowerCommand(
     @Param('id') id: string,
@@ -69,7 +82,7 @@ export class DisplayController {
   }
 
   @Post('boards/:id/commands/save')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_COMMAND)
   sendSaveCommand(
     @Param('id') id: string,
@@ -79,7 +92,7 @@ export class DisplayController {
   }
 
   @Post('boards/:id/commands/test')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_COMMAND)
   sendTestCommand(
     @Param('id') id: string,
@@ -90,7 +103,7 @@ export class DisplayController {
   }
 
   @Patch('boards/:id/modules')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_MANAGE)
   updateModules(
     @Param('id') id: string,
@@ -100,42 +113,42 @@ export class DisplayController {
   }
 
   @Patch('boards/:id')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_MANAGE)
   updateBoard(@Param('id') id: string, @Body() dto: UpdateDisplayBoardDto) {
     return this.displayService.updateBoard(id, dto);
   }
 
   @Patch('boards/:id/lines/auto')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_MANAGE)
   updateAutoLines(@Param('id') id: string, @Body() dto: UpdateDisplayLinesDto) {
     return this.displayService.updateLines(id, 'AUTO', dto);
   }
 
   @Patch('boards/:id/lines/manual')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_MANAGE)
   updateManualLines(@Param('id') id: string, @Body() dto: UpdateDisplayLinesDto) {
     return this.displayService.updateLines(id, 'MANUAL', dto);
   }
 
   @Post('boards/:id/commands')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_COMMAND)
   createCommand(@Param('id') id: string, @Body() dto: CreateDisplayCommandDto, @Req() req: any) {
     return this.displayService.createCommand(id, dto, req.user?.sub);
   }
 
   @Post('boards/:id/commands/publish')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_COMMAND)
   publish(@Param('id') id: string, @Req() req: any) {
     return this.displayService.publish(id, req.user?.sub);
   }
 
   @Post('boards/:id/commands/manual-mode')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_MANAGE)
   manualMode(
     @Param('id') id: string,
@@ -146,7 +159,7 @@ export class DisplayController {
   }
 
   @Post('boards/:id/commands/auto-mode')
-  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @UseGuards(JwtAuthGuard, PermissionGuard, DisplayBoardScopeGuard)
   @RequirePermission(PERMISSIONS.DISPLAY_MANAGE)
   autoMode(@Param('id') id: string, @Req() req: any) {
     return this.displayService.setAutoMode(id, req.user?.sub);

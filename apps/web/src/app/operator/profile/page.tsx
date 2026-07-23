@@ -1,9 +1,14 @@
 'use client';
 
+import {
+  formatKoreanPhoneNumber,
+  validateKoreanPhoneNumber,
+} from '@parking/shared/validation';
 import { useMemo, useState, type FormEvent } from 'react';
 
 import { useAuth } from '@/components/providers/auth-provider';
 import { apiFetch } from '@/lib/api-client';
+import { FORM_HINTS, FORM_PLACEHOLDERS } from '@/lib/forms/placeholders';
 
 function toText(value: unknown) {
   if (Array.isArray(value)) return value.filter(Boolean).join(', ') || '-';
@@ -16,10 +21,10 @@ export default function OperatorProfilePage() {
   const user = (session?.user ?? {}) as any;
 
   const [phone, setPhone] = useState(
-    String(user.phone ?? user.mobilePhone ?? user.contactNumber ?? ''),
+    formatKoreanPhoneNumber(user.phone ?? user.mobilePhone ?? user.contactNumber ?? ''),
   );
   const [emergencyContact, setEmergencyContact] = useState(
-    String(user.emergencyContact ?? user.operatorProfile?.emergencyContact ?? ''),
+    formatKoreanPhoneNumber(user.emergencyContact ?? user.operatorProfile?.emergencyContact ?? ''),
   );
   const [currentPassword, setCurrentPassword] = useState('');
   const [notice, setNotice] = useState('');
@@ -35,6 +40,20 @@ export default function OperatorProfilePage() {
 
     setNotice('');
     setError('');
+
+    const phoneValidation = validateKoreanPhoneNumber(phone, { mobileOnly: true });
+    if (!phoneValidation.ok) {
+      setError(phoneValidation.message ?? '올바른 휴대전화 번호가 아닙니다.');
+      return;
+    }
+
+    const emergencyContactValidation = validateKoreanPhoneNumber(emergencyContact, {
+      required: false,
+    });
+    if (!emergencyContactValidation.ok) {
+      setError(emergencyContactValidation.message ?? '올바른 비상 연락처 형식이 아닙니다.');
+      return;
+    }
 
     if (!currentPassword.trim()) {
       setError('회원 정보를 수정하려면 현재 비밀번호를 입력해야 합니다.');
@@ -114,9 +133,9 @@ export default function OperatorProfilePage() {
             <span className="text-sm font-black text-slate-700">휴대폰 번호</span>
             <input
               value={phone}
-              onChange={(event) => setPhone(event.target.value)}
+              onChange={(event) => setPhone(formatKoreanPhoneNumber(event.target.value))}
               className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500"
-              placeholder="010-0000-0000"
+              placeholder={FORM_PLACEHOLDERS.mobilePhone}
             />
           </label>
 
@@ -124,9 +143,9 @@ export default function OperatorProfilePage() {
             <span className="text-sm font-black text-slate-700">비상 연락처</span>
             <input
               value={emergencyContact}
-              onChange={(event) => setEmergencyContact(event.target.value)}
+              onChange={(event) => setEmergencyContact(formatKoreanPhoneNumber(event.target.value))}
               className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500"
-              placeholder="비상 연락처"
+              placeholder={FORM_PLACEHOLDERS.mobilePhone}
             />
           </label>
 

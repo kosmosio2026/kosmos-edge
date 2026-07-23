@@ -1,9 +1,23 @@
 import { PrismaClient, UserStatus } from '@parking/db';
-import { hash } from 'bcrypt';
+import { hashPassword } from '@parking/db/security/password';
 
 const prisma = new PrismaClient();
 
-const TEST_PASSWORD = 'kosmos2026!!';
+function getRequiredTestAccountPassword() {
+  const password =
+    process.env.KOSMOS_TEST_ACCOUNT_PASSWORD?.trim();
+
+  if (!password) {
+    throw new Error(
+      'KOSMOS_TEST_ACCOUNT_PASSWORD is required',
+    );
+  }
+
+  return password;
+}
+
+const TEST_PASSWORD =
+  getRequiredTestAccountPassword();
 
 async function upsertRole(code: string, name: string) {
   return prisma.role.upsert({
@@ -26,7 +40,7 @@ async function upsertUser(input: {
   roleName: string;
   tenantId?: string | null;
 }) {
-  const passwordHash = await hash(TEST_PASSWORD, 10);
+  const passwordHash = await hashPassword(TEST_PASSWORD);
   const role = await upsertRole(input.roleCode, input.roleName);
 
   const user = await prisma.user.upsert({
@@ -180,11 +194,11 @@ async function main() {
 
   console.log('Seeded test accounts');
   console.table([
-    { role: 'ADMIN', email: 'admin@kosmos.test', password: TEST_PASSWORD },
-    { role: 'MANAGER', email: 'manager@kosmos.test', password: TEST_PASSWORD },
-    { role: 'OPERATOR', email: 'operator@kosmos.test', password: TEST_PASSWORD },
-    { role: 'MEMBER', email: 'member@kosmos.test', password: TEST_PASSWORD },
-    { role: 'VISITOR', email: 'visitor@kosmos.test', password: TEST_PASSWORD },
+    { role: 'ADMIN', email: 'admin@kosmos.test' },
+    { role: 'MANAGER', email: 'manager@kosmos.test' },
+    { role: 'OPERATOR', email: 'operator@kosmos.test' },
+    { role: 'MEMBER', email: 'member@kosmos.test' },
+    { role: 'VISITOR', email: 'visitor@kosmos.test' },
   ]);
 }
 

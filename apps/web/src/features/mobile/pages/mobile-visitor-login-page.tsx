@@ -1,8 +1,10 @@
 'use client';
 
+import { normalizePin, validateVisitorPin } from '@parking/shared/validation';
 import { getPublicApiBaseUrl } from '@/lib/public-config';
 import { useState } from 'react';
 import { MobileAppShell } from '@/components/mobile/mobile-app-shell';
+import { FORM_HINTS, FORM_PLACEHOLDERS } from '@/lib/forms/placeholders';
 
 const API_BASE =
   getPublicApiBaseUrl();
@@ -23,7 +25,7 @@ function formatKoreanMobilePhone(value: string) {
 function blockManualHyphen(event: any, setMessage: (message: string | null) => void) {
   if (event.key === '-') {
     event.preventDefault();
-    setMessage('숫자만 입력하세요. 하이픈은 자동으로 입력됩니다.');
+    setMessage(FORM_HINTS.phoneDigitsOnly);
   }
 }
 
@@ -67,13 +69,10 @@ export default function MobileVisitorLoginPage() {
       return;
     }
 
-    if (!pinCode.trim()) {
-      setMessage('방문객 PIN을 입력하세요.');
-      return;
-    }
+    const pinValidation = validateVisitorPin(pinCode);
 
-    if (pinCode.trim().length < 4) {
-      setMessage('방문객 PIN은 4자리 이상이어야 합니다.');
+    if (!pinValidation.ok) {
+      setMessage(pinValidation.message ?? '방문객 PIN은 숫자 4~6자리로 입력하세요.');
       return;
     }
 
@@ -84,7 +83,7 @@ export default function MobileVisitorLoginPage() {
         method: 'POST',
         body: JSON.stringify({
           phone: formatKoreanMobilePhone(phone),
-          pinCode: pinCode.trim(),
+          pinCode: pinValidation.normalized,
         }),
       });
 
@@ -126,12 +125,12 @@ export default function MobileVisitorLoginPage() {
               value={phone}
               onKeyDown={(event) => blockManualHyphen(event, setMessage)}
               onChange={(event) => setPhone(formatKoreanMobilePhone(event.target.value))}
-              placeholder="방문객 등록 시 인증한 번호 · 예: 01029831136"
+              placeholder={FORM_PLACEHOLDERS.mobilePhone}
               inputMode="numeric"
               className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-4 text-base font-bold outline-none focus:border-blue-500"
             />
             <p className="mt-2 text-xs font-bold text-slate-400">
-              숫자만 입력하세요. 하이픈은 자동으로 입력됩니다.
+              {FORM_HINTS.phoneDigitsOnly}
             </p>
           </label>
 
@@ -139,10 +138,11 @@ export default function MobileVisitorLoginPage() {
             <span className="text-xs font-bold text-slate-400">방문객 PIN</span>
             <input
               value={pinCode}
-              onChange={(event) => setPinCode(event.target.value)}
-              placeholder="방문객 등록 시 설정한 4~6자리 PIN"
+              onChange={(event) => setPinCode(normalizePin(event.target.value))}
+              placeholder={FORM_PLACEHOLDERS.visitorPin}
               inputMode="numeric"
               type="password"
+                maxLength={6}
               className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-4 text-base font-bold outline-none focus:border-blue-500"
             />
           </label>

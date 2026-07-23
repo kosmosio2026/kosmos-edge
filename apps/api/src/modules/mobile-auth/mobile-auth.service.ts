@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
+import { PasswordService } from '../auth/password.service';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
@@ -8,6 +9,7 @@ export class MobileAuthService {
   constructor(
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
+    private readonly passwordService: PasswordService,
   ) {}
 
   async memberSignup(body: any) {
@@ -49,7 +51,8 @@ export class MobileAuthService {
       throw new BadRequestException('이미 가입된 휴대폰 번호입니다.');
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash =
+      await this.passwordService.hashPassword(password);
 
     const memberRole = await this.prisma.role.findUnique({
       where: { code: 'MEMBER' },
@@ -182,10 +185,34 @@ export class MobileAuthService {
       throw new UnauthorizedException('Member profile not found');
     }
 
-    const ok = await bcrypt.compare(password, user.passwordHash);
+    const ok = await this.passwordService.verifyPassword(
+      password,
+      user.passwordHash,
+    );
 
     if (!ok) {
       throw new UnauthorizedException('Invalid credentials');
+    }
+
+    if (this.passwordService.needsRehash(user.passwordHash)) {
+      const upgradedHash =
+        await this.passwordService.hashPassword(password);
+
+      await this.prisma.user.update({
+        where: {
+          id: user.id,
+        },
+        data: {
+          passwordHash: upgradedHash,
+        },
+      });
+
+      await this.prisma.passwordHistory.create({
+        data: {
+          userId: user.id,
+          passwordHash: upgradedHash,
+        },
+      });
     }
 
     const roles = user.roles.map((item: any) => item.role.code);

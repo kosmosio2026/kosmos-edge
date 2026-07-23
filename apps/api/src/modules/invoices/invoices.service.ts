@@ -1,3 +1,5 @@
+import { isEdgeRuntimeProfile } from '../../common/config/app-mode';
+import { calculateTaxBreakdown } from '../billing/tax-breakdown';
 import {
   ForbiddenException,
   Injectable,
@@ -9,6 +11,8 @@ import {
   FeePolicyService,
   ParkingFeeCalculationResult,
 } from '../fees/fee-policy.service';
+import { AutomaticDiscountService } from '../billing/automatic-discount.service';
+import { TenantCouponsService } from '../tenants/tenant-coupons.service';
 
 type InvoiceStatusLike =
   | 'DRAFT'
@@ -117,6 +121,8 @@ export class InvoicesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly feePolicyService: FeePolicyService,
+    private readonly automaticDiscountService: AutomaticDiscountService,
+    private readonly tenantCouponsService: TenantCouponsService,
   ) {}
 
   async findBySessionId(sessionId: string): Promise<InvoiceLike | null> {
@@ -1206,13 +1212,41 @@ export class InvoicesService {
     const watcherRewardBasisAmount =
       this.calculateWatcherRewardBasis(session, parkingLotPolicy);
 
-    const amount = Math.max(
+    const amountBeforeAutomaticDiscount = Math.max(
       0,
       baseParkingAmount - directRegistrationDiscountAmount,
     );
 
+    const automaticDiscount =
+      await this.automaticDiscountService.calculateForSession({
+        sessionId: session.id,
+        baseParkingAmount,
+        amountBeforeAutomaticDiscount,
+        totalMinutes,
+        feePolicy: parkingLotPolicy,
+        now,
+      });
+
+    const tenantCoupon =
+      await this.tenantCouponsService.calculateReservedCouponDiscount({
+        sessionId: session.id,
+        amountBeforeCoupon: automaticDiscount.finalAmount,
+        baseParkingAmount,
+        automaticDiscountAmount: automaticDiscount.totalDiscountAmount,
+        totalMinutes,
+        feePolicy: parkingLotPolicy,
+        now,
+      });
+
+    const amount = tenantCoupon.finalAmount;
+
     const totalDiscountAmount =
-      calculation.discountAmount + directRegistrationDiscountAmount;
+      calculation.discountAmount +
+      directRegistrationDiscountAmount +
+      automaticDiscount.totalDiscountAmount +
+      tenantCoupon.discountAmount;
+
+    const taxBreakdown = calculateTaxBreakdown(amount, parkingLotPolicy?.taxType);
 
     const paidAmount = existing?.paidAmount ?? 0;
     const unpaidAmount = Math.max(0, amount - paidAmount);
@@ -1232,10 +1266,28 @@ export class InvoicesService {
         directRegistrationDiscountAmount,
         registrationGraceDiscountAmount: directRegistrationDiscountAmount,
         watcherRewardBasisAmount,
+        automaticDiscountAmount: automaticDiscount.totalDiscountAmount,
+        automaticDiscounts: automaticDiscount.applications,
+        tenantCouponDiscountAmount: tenantCoupon.discountAmount,
+        tenantCoupon,
         finalAmount: amount,
+        taxType: taxBreakdown.taxType,
+        supplyAmount: taxBreakdown.supplyAmount,
+        vatAmount: taxBreakdown.vatAmount,
+        taxExemptAmount: taxBreakdown.taxExemptAmount,
       },
       recalculatedAt: now.toISOString(),
       source: 'INVOICE_SERVICE',
+    };
+
+    const finalCalculation = {
+      ...calculation,
+      automaticDiscountAmount: automaticDiscount.totalDiscountAmount,
+      automaticDiscounts: automaticDiscount.applications,
+      tenantCouponDiscountAmount: tenantCoupon.discountAmount,
+      tenantCoupon,
+      totalAmount: amount,
+      finalAmount: amount,
     };
 
     if (existing) {
@@ -1253,6 +1305,10 @@ export class InvoicesService {
           authorityRegistrationSurchargeAmount: 0,
           watcherRewardBasisAmount,
           finalAmount: amount,
+          taxType: taxBreakdown.taxType as any,
+          supplyAmount: taxBreakdown.supplyAmount,
+          vatAmount: taxBreakdown.vatAmount,
+          taxExemptAmount: taxBreakdown.taxExemptAmount,
           status: status as any,
           issuedAt: existing.issuedAt ?? now,
           paidAt: status === 'PAID' ? existing.paidAt ?? now : existing.paidAt,
@@ -1260,9 +1316,23 @@ export class InvoicesService {
         },
       });
 
+      await this.automaticDiscountService.replaceSessionSnapshots({
+        sessionId: session.id,
+        invoiceId: invoice.id,
+        result: automaticDiscount,
+      });
+
+      if (unpaidAmount <= 0 && tenantCoupon.couponId) {
+        await this.tenantCouponsService.completeReservedCouponForInvoice({
+          sessionId: session.id,
+          invoiceId: invoice.id,
+          actorUserId: session.userId,
+        });
+      }
+
       return {
         invoice: invoice as InvoiceLike,
-        calculation,
+        calculation: finalCalculation,
       };
     }
 
@@ -1280,15 +1350,33 @@ export class InvoicesService {
         authorityRegistrationSurchargeAmount: 0,
         watcherRewardBasisAmount,
         finalAmount: amount,
+        taxType: taxBreakdown.taxType as any,
+        supplyAmount: taxBreakdown.supplyAmount,
+        vatAmount: taxBreakdown.vatAmount,
+        taxExemptAmount: taxBreakdown.taxExemptAmount,
         issuedAt: now,
         paidAt: status === 'PAID' ? now : null,
         metadata,
       },
     });
 
+    await this.automaticDiscountService.replaceSessionSnapshots({
+      sessionId: session.id,
+      invoiceId: invoice.id,
+      result: automaticDiscount,
+    });
+
+    if (unpaidAmount <= 0 && tenantCoupon.couponId) {
+      await this.tenantCouponsService.completeReservedCouponForInvoice({
+        sessionId: session.id,
+        invoiceId: invoice.id,
+        actorUserId: session.userId,
+      });
+    }
+
     return {
       invoice: invoice as InvoiceLike,
-      calculation,
+      calculation: finalCalculation,
     };
   }
 
@@ -1621,12 +1709,14 @@ export class InvoicesService {
   }
 
   private assertCloudPaymentAuthority() {
-    const appMode = (process.env.APP_MODE ?? 'cloud').toLowerCase();
     const paymentAuthority = (
       process.env.PAYMENT_AUTHORITY ?? 'cloud'
     ).toLowerCase();
 
-    if (appMode === 'edge' || paymentAuthority !== 'cloud') {
+    if (
+      isEdgeRuntimeProfile() ||
+      paymentAuthority !== 'cloud'
+    ) {
       throw new ForbiddenException(
         'Payment operations are only available in cloud mode',
       );

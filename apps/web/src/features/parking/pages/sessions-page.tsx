@@ -30,6 +30,11 @@ type ParkingSessionRow = {
   metadata?: any;
   latestSensorData?: any;
   latestInvoice?: any;
+  invoiceId?: string | null;
+  invoiceNo?: string | null;
+  invoiceStatus?: string | null;
+  receiptId?: string | null;
+  paidAt?: string | null;
   registrationPhotos?: {
     id: string;
     imageUrl: string;
@@ -59,20 +64,46 @@ type ParkingSessionRow = {
         }
       | null;
     parkingLot?: string | null;
+    device?: any;
+    sensorDevice?: any;
   } | null;
   ParkingSpace?: {
     id?: string | null;
     code?: string | null;
     name?: string | null;
     status?: string | null;
-    section?: string | null;
+    section?:
+      | string
+      | {
+          id?: string | null;
+          name?: string | null;
+          code?: string | null;
+          parkingLot?: {
+            id?: string | null;
+            name?: string | null;
+            code?: string | null;
+          } | null;
+        }
+      | null;
     parkingLot?: string | null;
     device?: any;
+    sensorDevice?: any;
   } | null;
 };
 
 type FilterKey =
-  "ACTIVE" | "UNREGISTERED_OVER_10" | "REGISTERED" | "OUTSTANDING";
+  | "ACTIVE"
+  | "UNREGISTERED_OVER_10"
+  | "REGISTERED"
+  | "OUTSTANDING"
+  | "PAID_NO_EXIT";
+
+type PaidWithoutExitWork = {
+  minutes: number | null;
+  label: string;
+  description: string;
+  className: string;
+};
 
 function getSessionParkingSpace(row: ParkingSessionRow) {
   return row.parkingSpace ?? row.ParkingSpace ?? null;
@@ -86,8 +117,9 @@ function getSessionParkingLotName(row: ParkingSessionRow) {
 
   const parkingLot = (space as any).parkingLot;
   if (typeof parkingLot === "string" && parkingLot) return parkingLot;
-  if (parkingLot?.name || parkingLot?.code)
+  if (parkingLot?.name || parkingLot?.code) {
     return parkingLot.name ?? parkingLot.code;
+  }
 
   const section = (space as any).section;
   if (section && typeof section === "object") {
@@ -105,8 +137,9 @@ function getSessionSectionName(row: ParkingSessionRow) {
 
   const section = (space as any).section;
   if (typeof section === "string" && section) return section;
-  if (section && typeof section === "object")
+  if (section && typeof section === "object") {
     return section.name ?? section.code ?? "-";
+  }
 
   return "-";
 }
@@ -115,10 +148,11 @@ function getSessionSpaceCode(row: ParkingSessionRow) {
   if (row.parkingSpaceCode) return row.parkingSpaceCode;
 
   const space = getSessionParkingSpace(row);
+
   return (space as any)?.code ?? (space as any)?.number ?? "-";
 }
 
-function getSessionSpaceDisplay(row: any) {
+function getSessionSpaceDisplay(row: ParkingSessionRow) {
   return getSessionSpaceCode(row);
 }
 
@@ -185,7 +219,7 @@ function formatTableDate(value?: string | null) {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-      hour12: false,
+    hour12: false,
   });
 }
 
@@ -199,9 +233,9 @@ function formatDate(value?: string | null) {
 }
 
 function formatKoreanPhoneNumber(value?: string | null) {
-  const digits = String(value ?? '').replace(/\D/g, '');
+  const digits = String(value ?? "").replace(/\D/g, "");
 
-  if (!digits) return '-';
+  if (!digits) return "-";
 
   if (digits.length === 11) {
     return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
@@ -211,9 +245,8 @@ function formatKoreanPhoneNumber(value?: string | null) {
     return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
   }
 
-  return String(value ?? '-');
+  return String(value ?? "-");
 }
-
 
 function getBilledAmount(row: any) {
   return Number(
@@ -239,7 +272,8 @@ function getPaidAmount(row: any) {
 }
 
 function getUnpaidAmount(row: any) {
-  const explicit = row.unpaidAmount ?? row.unpaidFee ?? row.latestInvoice?.unpaidAmount;
+  const explicit =
+    row.unpaidAmount ?? row.unpaidFee ?? row.latestInvoice?.unpaidAmount;
 
   if (explicit !== null && explicit !== undefined) {
     return Number(explicit);
@@ -270,7 +304,7 @@ function getHistoryActionModal(row: ParkingSessionRow): "detail" | "payment" {
 }
 
 function formatCurrency(value?: number | null) {
-  return `₩${Number(value ?? 0).toLocaleString()}`;
+  return `₩${Number(value ?? 0).toLocaleString("ko-KR")}`;
 }
 
 function readFileAsDataUrl(file: File) {
@@ -355,6 +389,17 @@ function formatElapsed(minutes?: number | null) {
   return `${mins}분`;
 }
 
+function formatElapsedCell(
+  elapsed: number | null,
+  paidExitWork: PaidWithoutExitWork | null,
+) {
+  const base = formatElapsed(elapsed);
+
+  if (!paidExitWork) return base;
+
+  return `${base}(결제 후 ${formatElapsed(paidExitWork.minutes)})`;
+}
+
 function isUnregisteredOver10(row: ParkingSessionRow) {
   return (
     row.status === "ACTIVE" &&
@@ -388,12 +433,10 @@ function getRegistrationBadge(row: ParkingSessionRow) {
   };
 }
 
-
-
 function getPaymentBadge(row: ParkingSessionRow) {
   const unpaid = Number(row.unpaidFee ?? row.unpaidAmount ?? 0);
   const paid = Number(row.paidAmount ?? 0);
-  const invoiceStatus = row.latestInvoice?.status;
+  const invoiceStatus = row.invoiceStatus ?? row.latestInvoice?.status;
 
   if (invoiceStatus === "PAID" || (paid > 0 && unpaid <= 0)) {
     return {
@@ -450,6 +493,7 @@ function getSessionSensorDevEui(row: any) {
 function getSensorDetailHref(row: any) {
   const devEui = getSessionSensorDevEui(row);
   if (!devEui) return "";
+
   return `/operator/devices/sensors?devEui=${encodeURIComponent(devEui)}`;
 }
 
@@ -457,15 +501,128 @@ function getSensorStatus(row: ParkingSessionRow) {
   const deviceStatus = row.latestSensorData?.device_status;
   const parkingStatus = row.latestSensorData?.parking_status;
 
-  if (deviceStatus === 2) return "Fault";
-  if (deviceStatus === 1) return "Warning";
-  if (parkingStatus === 1) return "Occupied";
-  if (parkingStatus === 0) return "Empty";
+  if (deviceStatus === 2) return "장애";
+  if (deviceStatus === 1) return "주의";
+  if (parkingStatus === 1) return "점유";
+  if (parkingStatus === 0) return "비점유";
 
   return "-";
 }
 
-export default function ParkingSessionsPage({ role = "admin", historyOnly = false }: Props) {
+function getSessionDevEui(row: any) {
+  if (!row) return "-";
+
+  const metadata =
+    row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+      ? row.metadata
+      : {};
+
+  const candidates = [
+    row.devEui,
+    row.dev_eui,
+    row.sensorDevEui,
+    row.sensorDeviceDevEui,
+    metadata.devEui,
+    metadata.dev_eui,
+    row.device?.devEui,
+    row.device?.dev_eui,
+    row.sensorDevice?.devEui,
+    row.sensorDevice?.dev_eui,
+    row.parkingSpace?.sensorDevice?.devEui,
+    row.parkingSpace?.sensorDevice?.dev_eui,
+    row.ParkingSpace?.sensorDevice?.devEui,
+    row.ParkingSpace?.sensorDevice?.dev_eui,
+    row.parkingSpace?.device?.devEui,
+    row.ParkingSpace?.device?.devEui,
+  ];
+
+  const found = candidates.find(
+    (value) => typeof value === "string" && value.trim().length > 0,
+  );
+
+  return found ? found.trim() : "-";
+}
+
+function getSessionPaidAt(row: ParkingSessionRow) {
+  return row.paidAt ?? row.latestInvoice?.paidAt ?? null;
+}
+
+function isPaidWithoutExit(row: ParkingSessionRow) {
+  const sessionStatus = String(row.status ?? "").toUpperCase();
+  const invoiceStatus = String(
+    row.invoiceStatus ?? row.latestInvoice?.status ?? "",
+  ).toUpperCase();
+
+  const paidAmount = Number(row.paidAmount ?? row.latestInvoice?.paidAmount ?? 0);
+  const unpaidAmount = Number(
+    row.unpaidAmount ?? row.unpaidFee ?? row.latestInvoice?.unpaidAmount ?? 0,
+  );
+
+  return (
+    sessionStatus === "ACTIVE" &&
+    !row.exitTime &&
+    (invoiceStatus === "PAID" || (paidAmount > 0 && unpaidAmount <= 0))
+  );
+}
+
+function paidWithoutExitMinutes(row: ParkingSessionRow) {
+  const paidAt = getSessionPaidAt(row) ?? row.entryTime;
+  if (!paidAt) return null;
+
+  const paidTime = new Date(paidAt).getTime();
+  if (Number.isNaN(paidTime)) return null;
+
+  return Math.max(0, Math.floor((Date.now() - paidTime) / 60000));
+}
+
+function getPaidWithoutExitWork(row: ParkingSessionRow): PaidWithoutExitWork | null {
+  if (!isPaidWithoutExit(row)) return null;
+
+  const minutes = paidWithoutExitMinutes(row);
+
+  if (minutes === null) {
+    return {
+      minutes,
+      label: "결제 후 미출차",
+      description: "출차 확인",
+      className: "border-amber-200 bg-amber-50 text-amber-800",
+    };
+  }
+
+  if (minutes < 10) {
+    return {
+      minutes,
+      label: "출차 대기",
+      description: "결제 후 미출차",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    };
+  }
+
+  if (minutes < 20) {
+    return {
+      minutes,
+      label: "출차 확인",
+      description: "결제 후 미출차",
+      className: "border-amber-200 bg-amber-50 text-amber-800",
+    };
+  }
+
+  return {
+    minutes,
+    label: "현장 확인",
+    description: "추가요금 검토",
+    className: "border-red-200 bg-red-50 text-red-700",
+  };
+}
+
+function getPaidWithoutExitActionLabel(work: PaidWithoutExitWork) {
+  return `${work.label} · ${work.description}`;
+}
+
+export default function ParkingSessionsPage({
+  role = "admin",
+  historyOnly = false,
+}: Props) {
   const isOperatorView = role === "operator";
   const { session } = useAuth();
   const router = useRouter();
@@ -481,12 +638,8 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
   const [loading, setLoading] = useState(false);
   const [registeringId, setRegisteringId] = useState<string | null>(null);
   const [plateNumber, setPlateNumber] = useState<Record<string, string>>({});
-  const [contactNumber, setContactNumber] = useState<Record<string, string>>(
-    {},
-  );
-  const [selectedRow, setSelectedRow] = useState<ParkingSessionRow | null>(
-    null,
-  );
+  const [contactNumber, setContactNumber] = useState<Record<string, string>>({});
+  const [selectedRow, setSelectedRow] = useState<ParkingSessionRow | null>(null);
   const [actionModal, setActionModal] = useState<
     "detail" | "register" | "payment" | null
   >(null);
@@ -494,6 +647,7 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
   const [manualPaymentSavingId, setManualPaymentSavingId] = useState<
     string | null
   >(null);
+  const [actionLogSavingId, setActionLogSavingId] = useState<string | null>(null);
   const [manualPaymentMethod, setManualPaymentMethod] = useState<
     Record<string, string>
   >({});
@@ -503,9 +657,9 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
   const [manualPaymentCollectedAt, setManualPaymentCollectedAt] = useState<
     Record<string, string>
   >({});
-  const [manualPaymentNote, setManualPaymentNote] = useState<
-    Record<string, string>
-  >({});
+  const [manualPaymentNote, setManualPaymentNote] = useState<Record<string, string>>(
+    {},
+  );
   const [registrationPhotoFile, setRegistrationPhotoFile] = useState<
     Record<string, File | null>
   >({});
@@ -537,7 +691,7 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
       setError(
         error instanceof Error
           ? error.message
-          : "Failed to load parking sessions.",
+          : "주차 세션을 불러오지 못했습니다.",
       );
     } finally {
       setLoading(false);
@@ -556,7 +710,8 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
       queryFilter === "ACTIVE" ||
       queryFilter === "UNREGISTERED_OVER_10" ||
       queryFilter === "REGISTERED" ||
-      queryFilter === "OUTSTANDING"
+      queryFilter === "OUTSTANDING" ||
+      queryFilter === "PAID_NO_EXIT"
     ) {
       setFilter(queryFilter);
     }
@@ -570,6 +725,9 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
     const active = rows.filter((row) => row.status === "ACTIVE");
     const unregisteredOver10 = rows.filter(isUnregisteredOver10);
     const registered = rows.filter((row) => Boolean(row.isRegistered));
+    const paidNoExit = rows.filter(isPaidWithoutExit);
+    const outstanding = rows.filter(isOutstanding);
+
     const outstandingTotal = rows.reduce(
       (sum, row) => sum + Number(row.unpaidFee ?? row.unpaidAmount ?? 0),
       0,
@@ -579,6 +737,8 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
       active: active.length,
       unregisteredOver10: unregisteredOver10.length,
       registered: registered.length,
+      paidNoExit: paidNoExit.length,
+      outstanding: outstanding.length,
       outstandingTotal,
     };
   }, [rows]);
@@ -632,6 +792,8 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
       result = result.filter((row) => Boolean(row.isRegistered));
     } else if (filter === "OUTSTANDING") {
       result = result.filter(isOutstanding);
+    } else if (filter === "PAID_NO_EXIT") {
+      result = result.filter(isPaidWithoutExit);
     }
 
     const keyword = searchText.trim().toLowerCase();
@@ -699,10 +861,7 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
       : null;
 
     const matchedRow =
-      matchedBySessionId ??
-      matchedBySpace ??
-      filteredRows[0] ??
-      null;
+      matchedBySessionId ?? matchedBySpace ?? filteredRows[0] ?? null;
 
     if (!matchedRow) return;
 
@@ -717,7 +876,7 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
     const contact = contactNumber[row.id]?.trim() ?? "";
 
     if (!plate && !contact) {
-      setError("Plate number or contact number is required.");
+      setError("차량번호 또는 연락처를 입력하세요.");
       return;
     }
 
@@ -739,8 +898,8 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
 
       setNotice(
         uploaded
-          ? `Session ${row.sessionNo ?? row.id} registered with photo.`
-          : `Session ${row.sessionNo ?? row.id} registered.`,
+          ? `주차 등록과 차량 사진 저장이 완료되었습니다. (${row.sessionNo ?? row.id})`
+          : `주차 등록이 완료되었습니다. (${row.sessionNo ?? row.id})`,
       );
       setPlateNumber((prev) => ({ ...prev, [row.id]: "" }));
       setContactNumber((prev) => ({ ...prev, [row.id]: "" }));
@@ -749,7 +908,7 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
       await load();
     } catch (error) {
       setError(
-        error instanceof Error ? error.message : "Failed to register session.",
+        error instanceof Error ? error.message : "주차 등록에 실패했습니다.",
       );
     } finally {
       setRegisteringId(null);
@@ -770,7 +929,11 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
       formData.append("file", compressed);
 
       const uploadedResponse = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000/api"}/files/vehicle-plate-photos`,
+        `${
+          process.env.NEXT_PUBLIC_API_BASE_URL ??
+          process.env.NEXT_PUBLIC_API_URL ??
+          "http://localhost:3000/api"
+        }/files/vehicle-plate-photos`,
         {
           method: "POST",
           headers: {
@@ -801,6 +964,45 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
       return uploaded;
     } finally {
       setRegistrationPhotoUploadingId(null);
+    }
+  }
+
+  async function recordSessionAction(row: ParkingSessionRow) {
+    if (!session?.accessToken) return;
+
+    const paidExitWork = getPaidWithoutExitWork(row);
+    const elapsed = elapsedMinutes(row);
+
+    setActionLogSavingId(row.id);
+    setError(null);
+    setNotice(null);
+
+    try {
+      await apiFetch(`/parking-sessions/${row.id}/action-log`, {
+        method: "POST",
+        accessToken: session.accessToken,
+        body: JSON.stringify({
+          type: "PAID_EXIT_CHECK",
+          action: paidExitWork?.label ?? "현장 확인",
+          reason: "PAID_WITHOUT_EXIT",
+          note: paidExitWork
+            ? `${paidExitWork.label} · ${paidExitWork.description}`
+            : "결제 후 미출차 현장 확인",
+          elapsedMinutes: elapsed,
+          paidExitMinutes: paidExitWork?.minutes ?? null,
+        }),
+      });
+
+      setNotice("현장 확인 기록이 저장되었습니다.");
+      await load();
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "현장 확인 기록 저장에 실패했습니다.",
+      );
+    } finally {
+      setActionLogSavingId(null);
     }
   }
 
@@ -852,7 +1054,6 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
     }
   }
 
-
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
   const safePage = Math.min(page, totalPages);
   const pageStartIndex = (safePage - 1) * pageSize;
@@ -873,7 +1074,6 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
   }, [page, totalPages]);
 
   const filterItems: { key: FilterKey; label: string; count?: number }[] = [
-    { key: "ACTIVE", label: "활성 세션", count: summary.active },
     {
       key: "UNREGISTERED_OVER_10",
       label: "등록 필요",
@@ -883,7 +1083,12 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
     {
       key: "OUTSTANDING",
       label: "미결제",
-      count: rows.filter(isOutstanding).length,
+      count: summary.outstanding,
+    },
+    {
+      key: "PAID_NO_EXIT",
+      label: "결제 후 미출차",
+      count: summary.paidNoExit,
     },
   ];
 
@@ -905,7 +1110,7 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
           onClick={() => void load()}
           className="rounded-2xl border px-4 py-2 text-sm font-medium hover:bg-slate-50"
         >
-          Refresh
+          {loading ? "새로고침 중..." : "새로고침"}
         </button>
       </div>
 
@@ -921,32 +1126,36 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
         </div>
       ) : null}
 
-      <section className="grid max-w-6xl grid-cols-2 gap-3 xl:grid-cols-4">
-        <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Active Sessions</div>
-          <div className="mt-2 text-3xl font-semibold">{summary.active}</div>
-        </div>
+      <section className="grid max-w-7xl grid-cols-2 gap-3 xl:grid-cols-5">
 
         <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Unregistered &gt; 10m</div>
+          <div className="text-sm text-slate-500">등록 필요(10분 초과)</div>
           <div className="mt-2 text-3xl font-semibold text-red-600">
             {summary.unregisteredOver10}
           </div>
         </div>
 
         <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Registered</div>
+          <div className="text-sm text-slate-500">등록 완료</div>
           <div className="mt-2 text-3xl font-semibold">
             {summary.registered}
           </div>
         </div>
 
         <div className="rounded-2xl border bg-white p-4">
-          <div className="text-sm text-slate-500">Outstanding Total</div>
-          <div className="mt-2 text-xl font-semibold">
-            {formatCurrency(summary.outstandingTotal)}
+          <div className="text-sm text-slate-500">미결제</div>
+          <div className="mt-2 text-3xl font-semibold text-amber-600">
+            {summary.outstanding}
           </div>
         </div>
+
+        <div className="rounded-2xl border bg-white p-4">
+          <div className="text-sm text-slate-500">결제 후 미출차</div>
+          <div className="mt-2 text-3xl font-semibold text-amber-600">
+            {summary.paidNoExit}
+          </div>
+        </div>
+
       </section>
 
       <section className="space-y-3">
@@ -1022,48 +1231,82 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
 
       {viewMode === "table" ? (
         <section className="overflow-x-auto rounded-3xl border bg-white">
-          <table className="w-full min-w-[1040px] text-left text-sm">
-            <thead className="bg-slate-50 text-xs font-black uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="w-[56px] whitespace-nowrap px-1.5 py-3 text-center">번호</th>
-                  <th className="px-2 py-3 text-center">주차장</th>
-                  <th className="px-2 py-3 text-center">주차면</th>
-                  <th className="px-2 py-3 text-center">입차 시간</th>
-                  {historyOnly ? (
-                    <th className="px-2 py-3 text-center">출차 시간</th>
-                  ) : null}
-                  <th className="px-2 py-3 text-center">{historyOnly ? "주차 시간" : "경과 시간"}</th>
-                  {!historyOnly ? (
-                    <th className="w-[92px] px-2 py-3 text-center">등록 상태</th>
-                  ) : null}
-                  <th className="w-[92px] px-2 py-3 text-center">결제 상태</th>
-                  <th className="min-w-[120px] px-2 py-3 text-center">차량번호</th>
-                  <th className="min-w-[132px] px-2 py-3 text-center">연락처</th>
-                  {historyOnly ? (
-                    <>
-                      <th className="whitespace-nowrap px-1 py-3 text-right">청구 금액</th>
-                      <th className="whitespace-nowrap px-1 py-3 text-right">결제 금액</th>
-                    </>
-                  ) : null}
-                  <th className="whitespace-nowrap px-1 py-3 text-right">{historyOnly ? "미납 금액" : "예상 요금"}</th>
-                  <th className="w-[92px] px-2 py-3 text-center">작업</th>
-                </tr>
-              </thead>
+          <table className="w-full min-w-[1380px] text-center text-sm">
+            <thead className="bg-slate-50 text-center text-xs font-black text-slate-500">
+              <tr>
+                <th className="w-[56px] whitespace-nowrap px-2 py-3 text-center">
+                  번호
+                </th>
+                <th className="whitespace-nowrap px-2 py-3 text-center">
+                  주차장
+                </th>
+                <th className="whitespace-nowrap px-2 py-3 text-center">
+                  주차면
+                </th>
+                <th className="whitespace-nowrap px-2 py-3 text-center">
+                  DevEUI
+                </th>
+                <th className="whitespace-nowrap px-2 py-3 text-center">
+                  입차 시간
+                </th>
+                {historyOnly ? (
+                  <th className="whitespace-nowrap px-2 py-3 text-center">
+                    출차 시간
+                  </th>
+                ) : null}
+                <th className="whitespace-nowrap px-2 py-3 text-center">
+                  {historyOnly ? "주차 시간" : "경과 시간"}
+                </th>
+                {!historyOnly ? (
+                  <th className="w-[100px] whitespace-nowrap px-2 py-3 text-center">
+                    등록 상태
+                  </th>
+                ) : null}
+                <th className="w-[100px] whitespace-nowrap px-2 py-3 text-center">
+                  결제 상태
+                </th>
+                <th className="min-w-[120px] whitespace-nowrap px-2 py-3 text-center">
+                  차량번호
+                </th>
+                <th className="min-w-[132px] whitespace-nowrap px-2 py-3 text-center">
+                  연락처
+                </th>
+                {historyOnly ? (
+                  <>
+                    <th className="whitespace-nowrap px-1 py-3 text-center">
+                      청구 금액
+                    </th>
+                    <th className="whitespace-nowrap px-1 py-3 text-center">
+                      결제 금액
+                    </th>
+                  </>
+                ) : null}
+                <th className="whitespace-nowrap px-1 py-3 text-center">
+                  {historyOnly ? "미납 금액" : "예상 요금"}
+                </th>
+                <th className="w-[190px] whitespace-nowrap px-2 py-3 text-center">
+                  작업
+                </th>
+              </tr>
+            </thead>
 
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={historyOnly ? 13 : 11} className="px-4 py-8 text-slate-500">
-                    Loading...
+                  <td
+                    colSpan={historyOnly ? 14 : 12}
+                    className="px-4 py-8 text-slate-500"
+                  >
+                    불러오는 중입니다.
                   </td>
                 </tr>
               ) : filteredRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={11}
+                    colSpan={historyOnly ? 14 : 12}
                     className="px-4 py-10 text-center text-slate-500"
                   >
-                    No parking sessions found.
+                    표시할 주차 세션이 없습니다.
                   </td>
                 </tr>
               ) : (
@@ -1071,7 +1314,7 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
                   const elapsed = elapsedMinutes(row);
                   const needsRegistration = isUnregisteredOver10(row);
                   const registrationBadge = getRegistrationBadge(row);
-                  const paymentBadge = getPaymentBadge(row);
+                  const paidExitWork = getPaidWithoutExitWork(row);
 
                   return (
                     <tr
@@ -1081,7 +1324,7 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
                         needsRegistration ? "bg-red-50/40" : "",
                       ].join(" ")}
                     >
-                      <td className="px-2 py-3 text-center">
+                      <td className="whitespace-nowrap px-2 py-3 text-center">
                         <button
                           type="button"
                           onClick={() => {
@@ -1093,71 +1336,94 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
                           {pageStartIndex + index + 1}
                         </button>
                       </td>
-                      <td className="max-w-[160px] truncate px-2 py-3 text-slate-700">
+
+                      <td className="max-w-[180px] truncate whitespace-nowrap px-2 py-3 text-center text-slate-700">
                         {getSessionParkingLotName(row)}
                       </td>
-                      <td className="whitespace-nowrap px-1.5 py-3 font-black text-slate-950">
+
+                      <td className="whitespace-nowrap px-2 py-3 text-center font-black text-slate-950">
                         {getSessionSpaceDisplay(row)}
                       </td>
-                      <td className="whitespace-nowrap px-1.5 py-3 text-slate-700">
+
+                      <td className="whitespace-nowrap px-2 py-3 text-center font-mono text-xs text-slate-600">
+                        {getSessionDevEui(row)}
+                      </td>
+
+                      <td className="whitespace-nowrap px-2 py-3 text-center text-slate-700">
                         {formatTableDate(row.entryTime)}
                       </td>
-                        {historyOnly ? (
-                          <td className="whitespace-nowrap px-1.5 py-3 text-slate-700">
-                            {formatTableDate(row.exitTime)}
-                          </td>
-                        ) : null}
+
+                      {historyOnly ? (
+                        <td className="whitespace-nowrap px-2 py-3 text-center text-slate-700">
+                          {formatTableDate(row.exitTime)}
+                        </td>
+                      ) : null}
+
                       <td
                         className={[
-                          "whitespace-nowrap px-1.5 py-3 font-semibold",
+                          "whitespace-nowrap px-2 py-3 text-center font-semibold",
                           needsRegistration ? "text-red-600" : "",
                         ].join(" ")}
                       >
-                        {formatElapsed(elapsed)}
+                        {formatElapsedCell(elapsed, paidExitWork)}
                       </td>
+
                       {!historyOnly ? (
-                          <td className="px-2 py-3 text-center">
-                            <span
-                              className={[
-                                "mx-auto inline-flex items-center justify-center whitespace-nowrap rounded-full px-3 py-1 text-xs font-black leading-none",
-                                registrationBadge.className,
-                              ].join(" ")}
-                            >
-                              {registrationBadge.label}
-                            </span>
-                          </td>
-                        ) : null}
-                      <td className="px-2 py-3 text-center">
+                        <td className="whitespace-nowrap px-2 py-3 text-center">
                           <span
                             className={[
                               "mx-auto inline-flex items-center justify-center whitespace-nowrap rounded-full px-3 py-1 text-xs font-black leading-none",
-                            paymentBadge.className,
-                          ].join(" ")}
-                        >
-                          {paymentBadge.label}
-                        </span>
+                              registrationBadge.className,
+                            ].join(" ")}
+                          >
+                            {registrationBadge.label}
+                          </span>
+                        </td>
+                      ) : null}
+
+                      <td className="whitespace-nowrap px-2 py-3 text-center">
                       </td>
-                      <td className="whitespace-nowrap px-1.5 py-3 text-center text-slate-700">
-                          {row.plateNumber ?? "-"}
-                        </td>
-                      <td className="whitespace-nowrap px-1.5 py-3 text-center text-slate-700">
-                          {formatKoreanPhoneNumber(row.contactNumber)}
-                        </td>
+
+                      <td className="whitespace-nowrap px-2 py-3 text-center text-slate-700">
+                        {row.plateNumber ?? "-"}
+                      </td>
+
+                      <td className="whitespace-nowrap px-2 py-3 text-center text-slate-700">
+                        {formatKoreanPhoneNumber(row.contactNumber)}
+                      </td>
+
                       {historyOnly ? (
-                          <>
-                            <td className="whitespace-nowrap px-1 py-3 text-right text-slate-700">
-                              {formatCurrency(getBilledAmount(row))}
-                            </td>
-                            <td className="whitespace-nowrap px-1 py-3 text-right text-slate-700">
-                              {formatCurrency(getPaidAmount(row))}
-                            </td>
-                          </>
-                        ) : null}
-                        <td className="whitespace-nowrap px-1 py-3 text-right text-slate-700">
-                            {formatCurrency(historyOnly ? getUnpaidAmount(row) : getExpectedFeeAmount(row))}
+                        <>
+                          <td className="whitespace-nowrap px-1 py-3 text-right text-slate-700">
+                            {formatCurrency(getBilledAmount(row))}
                           </td>
-                        <td className="px-2 py-3 text-center">
-                          <div className="flex max-w-[92px] flex-col gap-2">
+                          <td className="whitespace-nowrap px-1 py-3 text-right text-slate-700">
+                            {formatCurrency(getPaidAmount(row))}
+                          </td>
+                        </>
+                      ) : null}
+
+                      <td className="whitespace-nowrap px-1 py-3 text-right text-slate-700">
+                        {formatCurrency(
+                          historyOnly
+                            ? getUnpaidAmount(row)
+                            : getExpectedFeeAmount(row),
+                        )}
+                      </td>
+
+                      <td className="whitespace-nowrap px-2 py-3 text-center">
+                        <div className="flex min-w-[176px] flex-col items-center gap-2">
+                          {!historyOnly && paidExitWork ? (
+                            <div
+                              className={[
+                                "whitespace-nowrap rounded-xl border px-2.5 py-1.5 text-xs font-black leading-tight",
+                                paidExitWork.className,
+                              ].join(" ")}
+                            >
+                              {getPaidWithoutExitActionLabel(paidExitWork)}
+                            </div>
+                          ) : null}
+
                           {!historyOnly && canRegister && !row.isRegistered ? (
                             <button
                               type="button"
@@ -1170,43 +1436,45 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
                               주차 등록
                             </button>
                           ) : null}
-                            {historyOnly ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedRow(row);
-                                  setActionModal(getHistoryActionModal(row));
-                                }}
-                                className={[
-                                  "whitespace-nowrap rounded-lg px-2 py-1.5 text-xs font-black text-white",
-                                  getUnpaidAmount(row) > 0 ? "bg-blue-600" : "bg-emerald-600",
-                                ].join(" ")}
-                              >
-                                {getHistoryActionLabel(row)}
-                              </button>
-                            ) : isOutstanding(row) ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedRow(row);
-                                  setActionModal("payment");
-                                }}
-                                className="whitespace-nowrap rounded-xl bg-blue-600 px-3 py-2 text-xs font-black text-white"
-                              >
-                                결제 등록
-                              </button>
-                            ) : null}
 
-                            {!historyOnly &&
-                            (!canRegister || row.isRegistered) &&
-                            !isOutstanding(row) ? (
-                              <span className="px-2 py-2 text-xs font-bold text-slate-400">
-                                -
-                              </span>
-                            ) : null}
+                          {historyOnly ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedRow(row);
+                                setActionModal(getHistoryActionModal(row));
+                              }}
+                              className={[
+                                "whitespace-nowrap rounded-lg px-2 py-1.5 text-xs font-black text-white",
+                                getUnpaidAmount(row) > 0
+                                  ? "bg-blue-600"
+                                  : "bg-emerald-600",
+                              ].join(" ")}
+                            >
+                              {getHistoryActionLabel(row)}
+                            </button>
+                          ) : isOutstanding(row) ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedRow(row);
+                                setActionModal("payment");
+                              }}
+                              className="whitespace-nowrap rounded-xl bg-blue-600 px-3 py-2 text-xs font-black text-white"
+                            >
+                              결제 등록
+                            </button>
+                          ) : null}
+
+                          {!historyOnly &&
+                          (!canRegister || row.isRegistered) &&
+                          !isOutstanding(row) &&
+                          !paidExitWork ? (
+                            <span className="px-2 py-2 text-xs font-bold text-slate-400">
+                              -
+                            </span>
+                          ) : null}
                         </div>
-
-
                       </td>
                     </tr>
                   );
@@ -1326,6 +1594,7 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
                       {getSessionParkingLotName(selectedRow)}
                     </span>
                   </div>
+
                   <div className="flex justify-between gap-4">
                     <span className="font-bold text-slate-400">
                       구역/주차면
@@ -1335,59 +1604,93 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
                       {getSessionSpaceCode(selectedRow)}
                     </span>
                   </div>
+
+                  <div className="flex justify-between gap-4">
+                    <span className="font-bold text-slate-400">DevEUI</span>
+                    <span className="font-mono text-xs font-black text-slate-900">
+                      {getSessionDevEui(selectedRow)}
+                    </span>
+                  </div>
+
                   <div className="flex justify-between gap-4">
                     <span className="font-bold text-slate-400">차량번호</span>
                     <span className="text-slate-700">
                       {selectedRow.plateNumber ?? "-"}
                     </span>
                   </div>
+
                   <div className="flex justify-between gap-4">
                     <span className="font-bold text-slate-400">연락처</span>
                     <span className="text-slate-700">
                       {formatKoreanPhoneNumber(selectedRow.contactNumber)}
                     </span>
                   </div>
+
                   <div className="flex justify-between gap-4">
                     <span className="font-bold text-slate-400">입차</span>
                     <span className="text-slate-700">
                       {formatDate(selectedRow.entryTime)}
                     </span>
                   </div>
+
+                  {!historyOnly ? (
+                    <div className="flex justify-between gap-4">
+                      <span className="font-bold text-slate-400">경과 시간</span>
+                      <span className="text-slate-700">
+                        {formatElapsedCell(
+                          elapsedMinutes(selectedRow),
+                          getPaidWithoutExitWork(selectedRow),
+                        )}
+                      </span>
+                    </div>
+                  ) : null}
+
+                  {!historyOnly && getPaidWithoutExitWork(selectedRow) ? (
+                    <button
+                      type="button"
+                      disabled={actionLogSavingId === selectedRow.id}
+                      onClick={() => void recordSessionAction(selectedRow)}
+                      className="w-full rounded-2xl bg-amber-600 px-4 py-3 text-sm font-black text-white disabled:opacity-50"
+                    >
+                      {actionLogSavingId === selectedRow.id
+                        ? "현장 확인 기록 저장 중..."
+                        : "현장 확인 기록 저장"}
+                    </button>
+                  ) : null}
+
                   {historyOnly ? (
-                      <div className="grid grid-cols-3 gap-2 rounded-2xl bg-white p-3 text-xs">
-                        <div>
-                          <div className="font-bold text-slate-400">청구 금액</div>
-                          <div className="mt-1 text-slate-700">
-                            {formatCurrency(getBilledAmount(selectedRow))}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="font-bold text-slate-400">결제 금액</div>
-                          <div className="mt-1 text-slate-700">
-                            {formatCurrency(getPaidAmount(selectedRow))}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="font-bold text-slate-400">미납 금액</div>
-                          <div className="mt-1 text-slate-700">
-                            {formatCurrency(getUnpaidAmount(selectedRow))}
-                          </div>
+                    <div className="grid grid-cols-3 gap-2 rounded-2xl bg-white p-3 text-xs">
+                      <div>
+                        <div className="font-bold text-slate-400">청구 금액</div>
+                        <div className="mt-1 text-slate-700">
+                          {formatCurrency(getBilledAmount(selectedRow))}
                         </div>
                       </div>
-                    ) : (
-                      <div className="flex justify-between gap-4">
-                        <span className="font-bold text-slate-400">예상 요금</span>
-                        <span className="text-slate-700">
-                          {formatCurrency(getExpectedFeeAmount(selectedRow))}
-                        </span>
+                      <div>
+                        <div className="font-bold text-slate-400">결제 금액</div>
+                        <div className="mt-1 text-slate-700">
+                          {formatCurrency(getPaidAmount(selectedRow))}
+                        </div>
                       </div>
-                    )}
+                      <div>
+                        <div className="font-bold text-slate-400">미납 금액</div>
+                        <div className="mt-1 text-slate-700">
+                          {formatCurrency(getUnpaidAmount(selectedRow))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex justify-between gap-4">
+                      <span className="font-bold text-slate-400">예상 요금</span>
+                      <span className="text-slate-700">
+                        {formatCurrency(getExpectedFeeAmount(selectedRow))}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-4 rounded-3xl border bg-white p-4">
-                  <div className="text-sm text-slate-700">
-                    차량 사진
-                  </div>
+                  <div className="text-sm text-slate-700">차량 사진</div>
                   {selectedRow.registrationPhotos?.length ? (
                     <div className="mt-3 grid gap-4 md:grid-cols-2">
                       {selectedRow.registrationPhotos
@@ -1422,9 +1725,7 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
                 </div>
 
                 <div className="mt-4 rounded-3xl border bg-white p-4">
-                  <div className="text-sm text-slate-700">
-                    수동 결제 이력
-                  </div>
+                  <div className="text-sm text-slate-700">수동 결제 이력</div>
                   {selectedRow.latestInvoice?.manualPayments?.length ? (
                     <div className="mt-3 space-y-2">
                       {selectedRow.latestInvoice.manualPayments.map(
@@ -1548,9 +1849,7 @@ export default function ParkingSessionsPage({ role = "admin", historyOnly = fals
                       }
 
                       if (file.size > 8 * 1024 * 1024) {
-                        setError(
-                          "원본 이미지는 8MB 이하만 선택할 수 있습니다.",
-                        );
+                        setError("원본 이미지는 8MB 이하만 선택할 수 있습니다.");
                         event.target.value = "";
                         return;
                       }

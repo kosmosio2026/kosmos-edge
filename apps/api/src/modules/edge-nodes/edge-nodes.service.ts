@@ -11,7 +11,6 @@ import type { AuthUser } from '../../common/types/auth-user.type';
 type CreateEdgeNodeInput = {
   code?: string;
   name?: string;
-  tenantId?: string | null;
   status?: string;
   appVersion?: string | null;
   metadata?: unknown;
@@ -20,7 +19,6 @@ type CreateEdgeNodeInput = {
 type UpdateEdgeNodeInput = {
   code?: string;
   name?: string;
-  tenantId?: string | null;
   status?: string;
   appVersion?: string | null;
   metadata?: unknown;
@@ -47,10 +45,11 @@ export class EdgeNodesService {
     const items = await this.prisma.edgeNode.findMany({
       orderBy: [{ createdAt: 'desc' }],
       include: {
-        tenant: {
+        managementCompany: {
           select: {
             id: true,
             name: true,
+            code: true,
           },
         },
         keys: {
@@ -73,7 +72,6 @@ export class EdgeNodesService {
                 id: true,
                 code: true,
                 name: true,
-                tenantId: true,
               },
             },
           },
@@ -99,12 +97,6 @@ export class EdgeNodesService {
     const item = await this.prisma.edgeNode.findUnique({
       where: { id },
       include: {
-        tenant: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
         keys: {
           orderBy: [{ createdAt: 'desc' }],
           select: {
@@ -125,7 +117,6 @@ export class EdgeNodesService {
                 id: true,
                 code: true,
                 name: true,
-                tenantId: true,
               },
             },
           },
@@ -154,7 +145,6 @@ export class EdgeNodesService {
     const data: Record<string, unknown> = {
       code,
       name,
-      tenantId: this.nullableString(input.tenantId),
       status: this.optionalString(input.status) ?? 'ACTIVE',
       appVersion: this.nullableString(input.appVersion),
     };
@@ -175,7 +165,7 @@ export class EdgeNodesService {
       meta: {
         code: item.code,
         name: item.name,
-        tenantId: item.tenantId ?? null,
+        managementCompanyId: item.managementCompanyId ?? null,
         status: item.status,
       },
     });
@@ -198,9 +188,6 @@ export class EdgeNodesService {
       data.name = this.requiredString(input.name, 'name');
     }
 
-    if (input.tenantId !== undefined) {
-      data.tenantId = this.nullableString(input.tenantId);
-    }
 
     if (input.status !== undefined) {
       data.status = this.optionalString(input.status) ?? 'ACTIVE';
@@ -393,7 +380,7 @@ export class EdgeNodesService {
         id: true,
         code: true,
         name: true,
-        tenantId: true,
+        managementCompanyId: true,
       },
     });
 
@@ -429,11 +416,19 @@ export class EdgeNodesService {
             id: true,
             code: true,
             name: true,
-            tenantId: true,
           },
         },
       },
     });
+
+    if (parkingLot.managementCompanyId) {
+      await this.prisma.edgeNode.update({
+        where: { id: edgeNodeId },
+        data: {
+          managementCompanyId: parkingLot.managementCompanyId,
+        },
+      });
+    }
 
     await this.writeAuditLog({
       user,
@@ -526,10 +521,11 @@ export class EdgeNodesService {
     const items = await this.prisma.parkingLot.findMany({
       orderBy: [{ name: 'asc' }],
       include: {
-        tenant: {
+        managementCompany: {
           select: {
             id: true,
             name: true,
+            code: true,
           },
         },
         edgeParkingLots: {
@@ -553,8 +549,11 @@ export class EdgeNodesService {
         id: item.id,
         code: item.code,
         name: item.name,
-        tenantId: item.tenantId,
-        tenantName: item.tenant?.name ?? null,
+        tenantId: null,
+        tenantName: null,
+        managementCompanyId: item.managementCompanyId ?? null,
+        managementCompanyName: item.managementCompany?.name ?? null,
+        managementCompanyCode: item.managementCompany?.code ?? null,
         isActive: item.isActive,
         address: item.address ?? null,
         region: item.region ?? null,
@@ -640,127 +639,6 @@ export class EdgeNodesService {
     return this.get(user, id);
   }
 
-  async runtimeStatus(user: AuthUser | undefined, id: string) {
-    const nodeData = await this.get(user, id);
-    const item = (nodeData as any).item ?? nodeData;
-    const prismaAny = this.prisma as any;
-
-    const destination = `EDGE:${id}`;
-
-    const [
-      cloudActiveKeyCount,
-      cloudRevokedKeyCount,
-      cloudPendingOutboxCount,
-      cloudFailedOutboxCount,
-      recentCloudOutboxIssues,
-    ] = await Promise.all([
-      prismaAny.edgeNodeKey.count({
-        where: {
-          edgeNodeId: id,
-          isActive: true,
-          revokedAt: null,
-        },
-      }),
-      prismaAny.edgeNodeKey.count({
-        where: {
-          edgeNodeId: id,
-          OR: [
-            { isActive: false },
-            { revokedAt: { not: null } },
-          ],
-        },
-      }),
-      prismaAny.syncOutbox.count({
-        where: {
-          destination,
-          status: 'PENDING',
-        },
-      }),
-      prismaAny.syncOutbox.count({
-        where: {
-          destination,
-          status: 'FAILED',
-        },
-      }),
-      prismaAny.syncOutbox.findMany({
-        where: {
-          destination,
-          status: {
-            in: ['PENDING', 'FAILED'],
-          },
-        },
-        orderBy: {
-          updatedAt: 'desc',
-        },
-        take: 5,
-        select: {
-          id: true,
-          eventId: true,
-          eventType: true,
-          destination: true,
-          status: true,
-          retryCount: true,
-          lastError: true,
-          nextRetryAt: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      }),
-    ]);
-
-    const lastSeenAt = item.lastSeenAt ? new Date(item.lastSeenAt) : null;
-    const now = new Date();
-
-    const secondsSinceLastSeen = lastSeenAt
-      ? Math.max(0, Math.round((now.getTime() - lastSeenAt.getTime()) / 1000))
-      : null;
-
-    const connectionStatus =
-      secondsSinceLastSeen === null
-        ? 'UNKNOWN'
-        : secondsSinceLastSeen <= 300
-          ? 'ONLINE'
-          : secondsSinceLastSeen <= 1800
-            ? 'STALE'
-            : 'OFFLINE';
-
-    return {
-      ok: true,
-      item: {
-        edgeNode: {
-          id: item.id,
-          code: item.code,
-          name: item.name,
-          status: item.status,
-          appVersion: item.appVersion,
-          lastSeenAt: item.lastSeenAt,
-          lastConnectedAt: item.lastConnectedAt,
-          lastSyncAt: item.lastSyncAt,
-        },
-        connection: {
-          status: connectionStatus,
-          secondsSinceLastSeen,
-          checkedAt: now.toISOString(),
-        },
-        cloudKeys: {
-          activeCount: cloudActiveKeyCount,
-          revokedCount: cloudRevokedKeyCount,
-          totalCount: cloudActiveKeyCount + cloudRevokedKeyCount,
-        },
-        cloudOutbox: {
-          destination,
-          pendingCount: cloudPendingOutboxCount,
-          failedCount: cloudFailedOutboxCount,
-          recentIssues: recentCloudOutboxIssues,
-        },
-        notes: [
-          '이 상태 카드는 Cloud DB 기준입니다.',
-          'Edge API worker live status는 Edge API Key가 필요한 보호 endpoint이므로 2차 live check 기능에서 별도로 다룹니다.',
-        ],
-      },
-    };
-  }
-
   private async ensureEdgeNode(id: string) {
     const edgeNode = await this.prisma.edgeNode.findUnique({
       where: { id },
@@ -783,8 +661,11 @@ export class EdgeNodesService {
       id: item.id,
       code: item.code,
       name: item.name,
-      tenantId: item.tenantId,
-      tenantName: item.tenant?.name ?? null,
+      tenantId: null,
+      tenantName: null,
+        managementCompanyId: item.managementCompanyId ?? null,
+        managementCompanyName: item.managementCompany?.name ?? null,
+        managementCompanyCode: item.managementCompany?.code ?? null,
       status: item.status,
       appVersion: item.appVersion,
       lastSeenAt: item.lastSeenAt,
@@ -894,8 +775,7 @@ export class EdgeNodesService {
               ...manager,
               parkingLotIds: [link.parkingLotId],
             });
-          }
-        }
+          } }
       }
 
       result.set(edgeNodeId, Array.from(managersById.values()));

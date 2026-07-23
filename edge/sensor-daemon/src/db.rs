@@ -1,7 +1,7 @@
-use chrono::{DateTime, Utc};
-use sqlx::PgPool;
 use crate::proto;
+use chrono::{DateTime, Utc};
 use serde_json::json;
+use sqlx::PgPool;
 
 //
 // SENSIO ENVIRONMENTAL SENSOR
@@ -77,9 +77,7 @@ async fn notify_parking_session_api(
     occurred_at: DateTime<Utc>,
 ) {
     let api_url = std::env::var("PARKING_API_SENSOR_EVENT_URL")
-        .unwrap_or_else(|_| {
-            "http://127.0.0.1:3000/api/devices/sensor-events".to_string()
-        });
+        .unwrap_or_else(|_| "http://127.0.0.1:3000/api/devices/sensor-events".to_string());
 
     let payload = json!({
         "eventType": "parking.sensor.status",
@@ -118,8 +116,7 @@ async fn notify_parking_session_api(
         Err(err) => {
             eprintln!(
                 "[parking-session-api] failed dev_eui={} error={}",
-                dev_eui,
-                err
+                dev_eui, err
             );
         }
     }
@@ -141,16 +138,14 @@ pub async fn insert_parking_sensor(
     data: &proto::KosmosSensorData,
     pool: &PgPool,
 ) -> Result<(), String> {
-
-    let (battery_status_int, battery_voltage_opt): (i32, Option<f32>) =
-        match data.battery_status {
-            proto::BatteryStatus::NearEnd => (0, Some(2.9)),
-            proto::BatteryStatus::Voltage(v) => {
-                let raw = (((v - 3.0) / 0.1).round() as i32).clamp(1, 14);
-                (raw, Some(v))
-            }
-            proto::BatteryStatus::Unknown => (15, None),
-        };
+    let (battery_status_int, battery_voltage_opt): (i32, Option<f32>) = match data.battery_status {
+        proto::BatteryStatus::NearEnd => (0, Some(2.9)),
+        proto::BatteryStatus::Voltage(v) => {
+            let raw = (((v - 3.0) / 0.1).round() as i32).clamp(1, 14);
+            (raw, Some(v))
+        }
+        proto::BatteryStatus::Unknown => (15, None),
+    };
 
     let device_code = match data.device_status {
         proto::DeviceStatus::Ok => 0,
@@ -167,61 +162,51 @@ pub async fn insert_parking_sensor(
         proto::ParkingStatus::Unknown => 255,
     };
 
-    sqlx::query!(
-        r#"
-        INSERT INTO parking_sensor_data
-            (dev_eui, gateway_id, time, dr, fcnt, fport,
-             rssi, snr, channel,
-             battery_status, battery_voltage,
-             device_status, parking_status, firmware_version)
-        VALUES
-            ($1,$2,$3,$4,$5,$6,
-             $7,$8,$9,
-             $10,$11,
-             $12,$13,$14)
-        "#,
-        dev_eui,
-        gateway_id,
-        time.naive_utc(),
-        dr,
-        fcnt,
-        fport,
-        rssi,
-        snr,
-        channel,
-        battery_status_int,
-        battery_voltage_opt.map(|v| v as f64),
-        device_code,
-        parking_code,
-        data.firmware_version as i32,
-    )
-    .execute(pool)
-    .await
-    .map_err(|e| format!("DB error (parking_sensor_data): {e}"))?;
-        // Notify NestJS API so it can create/close ParkingSession rows.
-    // The raw sensor table insert alone does not trigger NestJS business logic.
-notify_parking_session_api(
-    dev_eui,
-    parking_code,
-    device_code,
-    battery_status_int,
-    battery_voltage_opt,
-    data.firmware_version as i32,
-    gateway_id,
-    rssi,
-    snr,
-    channel,
-    dr,
-    fcnt,
-    fport,
-    time,
-).await;
+    let next_battery_voltage = battery_voltage_opt.map(|v| v as f64);
 
-    let prev = sqlx::query!(
+    let prev_history = sqlx::query!(
+        r#"
+        SELECT
+            gateway_id,
+            battery_status,
+            battery_voltage,
+            device_status,
+            parking_status,
+            firmware_version
+        FROM parking_sensor_data
+        WHERE lower(dev_eui) = lower($1)
+        ORDER BY time DESC
+        LIMIT 1
+        "#,
+        dev_eui
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("DB error (select latest parking_sensor_data): {e}"))?;
+
+    let should_record_history = match &prev_history {
+        None => true,
+        Some(prev) => {
+            let battery_voltage_changed = match (prev.battery_voltage, next_battery_voltage) {
+                (None, None) => false,
+                (Some(_), None) | (None, Some(_)) => true,
+                (Some(old), Some(new)) => (old - new).abs() >= 0.05,
+            };
+
+            prev.parking_status != parking_code
+                || prev.device_status != device_code
+                || prev.battery_status != battery_status_int
+                || prev.firmware_version != data.firmware_version as i32
+                || prev.gateway_id.as_str() != gateway_id
+                || battery_voltage_changed
+        }
+    };
+
+    let prev_state = sqlx::query!(
         r#"
         SELECT parking_status, state_since
         FROM parking_state
-        WHERE dev_eui = $1
+        WHERE lower(dev_eui) = lower($1)
         "#,
         dev_eui
     )
@@ -229,9 +214,9 @@ notify_parking_session_api(
     .await
     .map_err(|e| format!("DB error (select parking_state): {e}"))?;
 
-    let new_state_since = match prev {
+    let new_state_since = match prev_state {
         Some(row) if row.parking_status == parking_code => row.state_since,
-    _     => time.naive_utc(),
+        _ => time.naive_utc(),
     };
 
     sqlx::query!(
@@ -255,11 +240,65 @@ notify_parking_session_api(
         time.naive_utc(),
         rssi,
         snr,
-        battery_voltage_opt.map(|v| v as f64),
+        next_battery_voltage,
     )
     .execute(pool)
     .await
     .map_err(|e| format!("DB error (upsert parking_state): {e}"))?;
+
+    if should_record_history {
+        let insert_result = sqlx::query!(
+            r#"
+            INSERT INTO parking_sensor_data
+                (dev_eui, gateway_id, time, dr, fcnt, fport,
+                 rssi, snr, channel,
+                 battery_status, battery_voltage,
+                 device_status, parking_status, firmware_version)
+            VALUES
+                ($1,$2,$3,$4,$5,$6,
+                 $7,$8,$9,
+                 $10,$11,
+                 $12,$13,$14)
+            "#,
+            dev_eui,
+            gateway_id,
+            time.naive_utc(),
+            dr,
+            fcnt,
+            fport,
+            rssi,
+            snr,
+            channel,
+            battery_status_int,
+            next_battery_voltage,
+            device_code,
+            parking_code,
+            data.firmware_version as i32,
+        )
+        .execute(pool)
+        .await
+        .map_err(|e| format!("DB error (parking_sensor_data): {e}"))?;
+
+        if insert_result.rows_affected() > 0 {
+            notify_parking_session_api(
+                dev_eui,
+                parking_code,
+                device_code,
+                battery_status_int,
+                battery_voltage_opt,
+                data.firmware_version as i32,
+                gateway_id,
+                rssi,
+                snr,
+                channel,
+                dr,
+                fcnt,
+                fport,
+                time,
+            )
+            .await;
+        }
+    }
 
     Ok(())
 }
@@ -280,16 +319,14 @@ pub async fn insert_kosmos_tracker(
     data: &proto::KosmosTrackerData,
     pool: &PgPool,
 ) -> Result<(), String> {
-
-    let (battery_status_int, battery_voltage_opt): (i32, Option<f32>) =
-        match data.battery_status {
-            proto::BatteryStatus::NearEnd => (0, Some(2.9)),
-            proto::BatteryStatus::Voltage(v) => {
-                let raw = (((v - 3.0) / 0.1).round() as i32).clamp(1, 14);
-                (raw, Some(v))
-            }
-            proto::BatteryStatus::Unknown => (15, None),
-        };
+    let (battery_status_int, battery_voltage_opt): (i32, Option<f32>) = match data.battery_status {
+        proto::BatteryStatus::NearEnd => (0, Some(2.9)),
+        proto::BatteryStatus::Voltage(v) => {
+            let raw = (((v - 3.0) / 0.1).round() as i32).clamp(1, 14);
+            (raw, Some(v))
+        }
+        proto::BatteryStatus::Unknown => (15, None),
+    };
 
     let device_code = match data.device_status {
         proto::DeviceStatus::Ok => 0,

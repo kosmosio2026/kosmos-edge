@@ -10,6 +10,8 @@ const navItems = [
   { href: '/operator/map', label: '지도 보기' },
   { href: '/operator/parking/sessions', label: '주차 현황' },
   { href: '/operator/parking/history', label: '주차 이력' },
+  { href: '/operator/billing', label: '수금 관리' },
+  { href: '/operator/devices/faults', label: '장애 관리' },
   { href: '/operator/requests/sections', label: '구역 요청' },
   { href: '/operator/profile', label: '회원 정보' },
 ];

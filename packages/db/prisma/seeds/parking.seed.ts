@@ -16,7 +16,7 @@ const SECTIONS = [
 ];
 
 export async function seedParking(prisma: PrismaClient) {
-  const tenant = await prisma.tenant.upsert({
+  const managementCompany = await prisma.managementCompany.upsert({
     where: {
       code: 'KOSMOS',
     },
@@ -35,7 +35,7 @@ export async function seedParking(prisma: PrismaClient) {
     },
     update: {
       name: 'Development Parking Lot',
-      tenantId: tenant.id,
+      managementCompanyId: managementCompany.id,
       region: '서울특별시',
       district: '강남구',
       address: '서울특별시 강남구 테헤란로 1',
@@ -50,7 +50,7 @@ export async function seedParking(prisma: PrismaClient) {
     create: {
       code: LOT_CODE,
       name: 'Development Parking Lot',
-      tenantId: tenant.id,
+      managementCompanyId: managementCompany.id,
       region: '서울특별시',
       district: '강남구',
       address: '서울특별시 강남구 테헤란로 1',

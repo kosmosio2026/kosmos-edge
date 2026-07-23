@@ -1,8 +1,4 @@
-import {
-  IsNumber,
-  IsOptional,
-  IsString,
-} from 'class-validator';
+import { IsArray, IsIn, IsNumber, IsOptional, IsString } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CreateParkingLotDto {
@@ -42,4 +38,11 @@ export class CreateParkingLotDto {
   @IsString()
   contact?: string;
 
+  @IsOptional()
+  @IsArray()
+  photos?: string[];
+
+  @IsOptional()
+  @IsIn(['SENSOR', 'MANUAL'])
+  operationMode?: 'SENSOR' | 'MANUAL';
 }

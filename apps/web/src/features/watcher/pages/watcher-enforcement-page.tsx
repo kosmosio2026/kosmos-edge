@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { API_BASE, apiFetch, getToken } from './watcher-utils';
+import WatcherEnforcementAlertBanner from './watcher-enforcement-alert-banner';
 
 export default function WatcherEnforcementPage() {
   const [items, setItems] = useState<any[]>([]);
@@ -94,6 +95,8 @@ export default function WatcherEnforcementPage() {
         )}
 
         <div className="mt-5 space-y-3">
+          <WatcherEnforcementAlertBanner />
+
           {loading ? (
             <div className="rounded-3xl bg-white p-6 text-sm text-slate-500 shadow-sm">
               단속 대상을 불러오는 중입니다.

@@ -6,21 +6,21 @@ import {
   Param,
   Post,
   UseGuards,
-} from '@nestjs/common';
+} from "@nestjs/common";
 
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { PermissionGuard } from '../../common/guards/permission.guard';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { RequirePermission } from '../../common/decorators/require-permission.decorator';
-import { PERMISSIONS } from '../../common/rbac/permissions';
-import { AuthUser } from '../../common/types/auth-user.type';
+import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
+import { PermissionGuard } from "../../common/guards/permission.guard";
+import { CurrentUser } from "../../common/decorators/current-user.decorator";
+import { RequirePermission } from "../../common/decorators/require-permission.decorator";
+import { PERMISSIONS } from "../../common/rbac/permissions";
+import { AuthUser } from "../../common/types/auth-user.type";
 
-import { ApprovalService } from './approval.service';
-import { CreateManagerApprovalRequestDto } from './dto/create-manager-approval-request.dto';
-import { CreateOperatorApprovalRequestDto } from './dto/create-operator-approval-request.dto';
-import { CreateParkingLotApprovalRequestDto } from './dto/create-parking-lot-approval-request.dto';
-import { CreateOperatorSectionApprovalRequestDto } from './dto/create-operator-section-approval-request.dto';
-import { ReviewApprovalRequestDto } from './dto/review-approval-request.dto';
+import { ApprovalService } from "./approval.service";
+import { CreateManagerApprovalRequestDto } from "./dto/create-manager-approval-request.dto";
+import { CreateOperatorApprovalRequestDto } from "./dto/create-operator-approval-request.dto";
+import { CreateParkingLotApprovalRequestDto } from "./dto/create-parking-lot-approval-request.dto";
+import { CreateOperatorSectionApprovalRequestDto } from "./dto/create-operator-section-approval-request.dto";
+import { ReviewApprovalRequestDto } from "./dto/review-approval-request.dto";
 
 type ManagerLotRequestBody = {
   parkingLotId?: string;
@@ -36,7 +36,7 @@ type OperatorSectionRequestBody = {
   note?: string;
 };
 
-@Controller(['approval', 'approvals'])
+@Controller(["approval", "approvals"])
 export class ApprovalController {
   constructor(private readonly approvalService: ApprovalService) {}
 
@@ -45,7 +45,7 @@ export class ApprovalController {
   */
 
   @UseGuards(JwtAuthGuard)
-  @Post('manager-request')
+  @Post("manager-request")
   createManagerRequest(
     @CurrentUser() user: AuthUser,
     @Body() dto: CreateManagerApprovalRequestDto,
@@ -54,7 +54,7 @@ export class ApprovalController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Post('operator-request')
+  @Post("operator-request")
   createOperatorRequest(
     @CurrentUser() user: AuthUser,
     @Body() dto: CreateOperatorApprovalRequestDto,
@@ -64,33 +64,29 @@ export class ApprovalController {
 
   @UseGuards(JwtAuthGuard, PermissionGuard)
   @RequirePermission(PERMISSIONS.USER_MANAGE)
-  @Get('admin/pending-managers')
+  @Get("admin/pending-managers")
   listPendingManagers() {
     return this.approvalService.listPendingManagersForAdmin();
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('manager/pending-operators')
+  @Get("manager/pending-operators")
   listPendingOperators(@CurrentUser() user: AuthUser) {
     return this.approvalService.listPendingForManager(user.sub);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('admin/pending-operators')
-  listPendingOperatorsForAdminOrManager(
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.approvalService.listPendingOperatorsForAdminOrManager(
-      user.sub,
-    );
+  @Get("admin/pending-operators")
+  listPendingOperatorsForAdminOrManager(@CurrentUser() user: AuthUser) {
+    return this.approvalService.listPendingOperatorsForAdminOrManager(user.sub);
   }
 
   @UseGuards(JwtAuthGuard, PermissionGuard)
   @RequirePermission(PERMISSIONS.USER_MANAGE)
-  @Post(':requestId/review')
+  @Post(":requestId/review")
   review(
     @CurrentUser() user: AuthUser,
-    @Param('requestId') requestId: string,
+    @Param("requestId") requestId: string,
     @Body() dto: ReviewApprovalRequestDto,
   ) {
     return this.approvalService.review(user.sub, requestId, dto);
@@ -101,7 +97,7 @@ export class ApprovalController {
   */
 
   @UseGuards(JwtAuthGuard)
-  @Post('parking-lot-request')
+  @Post("parking-lot-request")
   createParkingLotRequest(
     @CurrentUser() user: AuthUser,
     @Body() dto: CreateParkingLotApprovalRequestDto,
@@ -111,7 +107,7 @@ export class ApprovalController {
 
   @UseGuards(JwtAuthGuard, PermissionGuard)
   @RequirePermission(PERMISSIONS.USER_MANAGE)
-  @Get('admin/pending-parking-lots')
+  @Get("admin/pending-parking-lots")
   listPendingParkingLots() {
     return this.approvalService.listPendingParkingLotsForAdmin();
   }
@@ -121,7 +117,7 @@ export class ApprovalController {
   */
 
   @UseGuards(JwtAuthGuard)
-  @Post('operator-section-request')
+  @Post("operator-section-request")
   createOperatorSectionRequest(
     @CurrentUser() user: AuthUser,
     @Body() dto: CreateOperatorSectionApprovalRequestDto,
@@ -130,41 +126,41 @@ export class ApprovalController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('operator-section-requests/pending')
-  listPendingOperatorSectionRequests(
-    @CurrentUser() user: AuthUser,
-  ) {
+  @Get("operator-section-requests/pending")
+  listPendingOperatorSectionRequests(@CurrentUser() user: AuthUser) {
     return this.approvalService.listPendingOperatorSectionRequests(user.sub);
   }
 
   @UseGuards(JwtAuthGuard, PermissionGuard)
   @RequirePermission(PERMISSIONS.USER_MANAGE)
-  @Get('admin/pending-operator-sections')
+  @Get("admin/pending-operator-sections")
   listPendingOperatorSectionsForAdmin() {
     return this.approvalService.listPendingOperatorSectionRequestsForAdmin();
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('manager/pending-operator-sections')
+  @Get("manager/pending-operator-sections")
   listPendingOperatorSectionsForManager(@CurrentUser() user: AuthUser) {
     return this.approvalService.listPendingOperatorSectionRequests(user.sub);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Get('operator/section-requests/my')
+  @Get("operator/section-requests/my")
   listMyOperatorSectionRequests(@CurrentUser() user: AuthUser) {
     return this.approvalService.listMyOperatorSectionRequests(user.sub);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Delete('operator-section-requests/:requestId')
+  @Delete("operator-section-requests/:requestId")
   withdrawOperatorSectionRequest(
     @CurrentUser() user: AuthUser,
-    @Param('requestId') requestId: string,
+    @Param("requestId") requestId: string,
   ) {
-    return this.approvalService.withdrawOperatorSectionRequest(user.sub, requestId);
+    return this.approvalService.withdrawOperatorSectionRequest(
+      user.sub,
+      requestId,
+    );
   }
-
 
   /*
    Web Batch 28C aliases
@@ -172,7 +168,13 @@ export class ApprovalController {
   */
 
   @UseGuards(JwtAuthGuard)
-  @Post('manager-lots')
+  @Get("manager-lots/requestable")
+  listRequestableManagerLots(@CurrentUser() user: AuthUser) {
+    return this.approvalService.listRequestableManagerLots(user.sub);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post("manager-lots")
   createManagerLotAccessRequest(
     @CurrentUser() user: AuthUser,
     @Body() body: ManagerLotRequestBody,
@@ -184,7 +186,7 @@ export class ApprovalController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Post('operator-sections')
+  @Post("operator-sections")
   createOperatorSectionAccessRequest(
     @CurrentUser() user: AuthUser,
     @Body() body: OperatorSectionRequestBody,
@@ -198,20 +200,20 @@ export class ApprovalController {
 
   @UseGuards(JwtAuthGuard, PermissionGuard)
   @RequirePermission(PERMISSIONS.USER_MANAGE)
-  @Post('manager-lots/:requestId/review')
+  @Post("manager-lots/:requestId/review")
   reviewManagerLotAccessRequest(
     @CurrentUser() user: AuthUser,
-    @Param('requestId') requestId: string,
+    @Param("requestId") requestId: string,
     @Body() dto: ReviewApprovalRequestDto,
   ) {
     return this.approvalService.review(user.sub, requestId, dto);
   }
 
   @UseGuards(JwtAuthGuard)
-  @Post('operator-sections/:requestId/review')
+  @Post("operator-sections/:requestId/review")
   reviewOperatorSectionAccessRequest(
     @CurrentUser() user: AuthUser,
-    @Param('requestId') requestId: string,
+    @Param("requestId") requestId: string,
     @Body() dto: ReviewApprovalRequestDto,
   ) {
     return this.approvalService.review(user.sub, requestId, dto);

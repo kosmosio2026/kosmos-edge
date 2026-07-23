@@ -3,6 +3,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MobileAuthController } from './mobile-auth.controller';
 import { MobileAuthService } from './mobile-auth.service';
+import { PasswordService } from '../auth/password.service';
 
 @Module({
   imports: [
@@ -14,6 +15,6 @@ import { MobileAuthService } from './mobile-auth.service';
     }),
   ],
   controllers: [MobileAuthController],
-  providers: [MobileAuthService, PrismaService],
+  providers: [MobileAuthService, PrismaService, PasswordService],
 })
 export class MobileAuthModule {}

@@ -1,3 +1,4 @@
+import { isEdgeRuntimeProfile } from '../../common/config/app-mode';
 import {
   BadRequestException,
   ForbiddenException,
@@ -20,6 +21,7 @@ import { TossWebhookDto } from './dto/toss-webhook.dto';
 import { ConfirmTossPaymentDto } from './dto/confirm-toss-payment.dto';
 import { PublicConfirmTossPaymentDto } from './dto/public-confirm-toss-payment.dto';
 import { InvoicesService } from '../invoices/invoices.service';
+import { TenantCouponsService } from '../tenants/tenant-coupons.service';
 
 @Injectable()
 export class PaymentsService {
@@ -27,6 +29,7 @@ export class PaymentsService {
     private readonly prisma: PrismaService,
     private readonly realtimePublisher: RealtimePublisherService,
     private readonly invoicesService: InvoicesService,
+    private readonly tenantCouponsService: TenantCouponsService,
   ) {}
 
   async mockCompleteSessionPayment(
@@ -167,6 +170,11 @@ export class PaymentsService {
     const invoice = invoiceBundle.invoice;
     const calculation = invoiceBundle.calculation;
 
+    await this.tenantCouponsService.assertInvoiceCouponReservation({
+      sessionId: session.id,
+      invoiceMetadata: invoice.metadata,
+    });
+
     const amount = this.resolveMockPaymentAmount({
       dtoAmount: dto.amount,
       invoiceAmount: invoice.amount,
@@ -226,6 +234,14 @@ export class PaymentsService {
         paymentReference,
       },
     });
+
+    if (paidInvoice.unpaidAmount <= 0) {
+      await this.tenantCouponsService.completeReservedCouponForInvoice({
+        sessionId: session.id,
+        invoiceId: paidInvoice.id,
+        actorUserId: userId,
+      });
+    }
 
     const paymentReason = isAdditionalFeeBeforeExit
       ? 'PAID_GRACE_EXPIRED_ADDITIONAL_FEE_BEFORE_EXIT'
@@ -511,6 +527,11 @@ export class PaymentsService {
       );
     }
 
+    await this.tenantCouponsService.assertInvoiceCouponReservation({
+      sessionId: invoice.sessionId,
+      invoiceMetadata: invoice.metadata,
+    });
+
     const result = await this.prisma.$transaction(async (tx) => {
       const payment = await tx.payment.create({
         data: {
@@ -569,6 +590,11 @@ export class PaymentsService {
       };
     });
 
+    await this.tenantCouponsService.completeReservedCouponForInvoice({
+      sessionId: result.session.id,
+      invoiceId: result.invoice.id,
+    });
+
     await this.publishPaymentConfirmedRealtime(result);
 
     return result;
@@ -615,6 +641,11 @@ export class PaymentsService {
     }
 
     if (payment.status === PaymentStatus.SUCCESS) {
+      await this.tenantCouponsService.completeReservedCouponForInvoice({
+        sessionId: payment.invoice.sessionId,
+        invoiceId: payment.invoice.id,
+        actorUserId: userId,
+      });
       return {
         ok: true,
         alreadyConfirmed: true,
@@ -622,6 +653,11 @@ export class PaymentsService {
         payment,
       };
     }
+
+    await this.tenantCouponsService.assertInvoiceCouponReservation({
+      sessionId: payment.invoice.sessionId,
+      invoiceMetadata: payment.invoice.metadata,
+    });
 
     const result = await this.prisma.$transaction(async (tx) => {
       const savedPayment = await tx.payment.update({
@@ -686,7 +722,15 @@ export class PaymentsService {
       };
     });
 
+    await this.tenantCouponsService.completeReservedCouponForInvoice({
+      sessionId: result.session.id,
+      invoiceId: result.invoice.id,
+      actorUserId: userId,
+    });
+
     await this.publishPaymentConfirmedRealtime(result);
+
+    await this.ensureReceiptForSuccessfulPayment(result.payment.id);
 
     return {
       ok: true,
@@ -695,6 +739,145 @@ export class PaymentsService {
       invoice: result.invoice,
       session: result.session,
     };
+  }
+
+  private getTossApiBaseUrl() {
+    return (process.env.TOSS_API_BASE_URL ?? 'https://api.tosspayments.com').replace(/\/+$/, '');
+  }
+
+  private getTossSecretKey() {
+    const secretKey = process.env.TOSS_SECRET_KEY;
+
+    if (!secretKey) {
+      throw new BadRequestException('TOSS_SECRET_KEY is not configured');
+    }
+
+    return secretKey;
+  }
+
+  private encodeTossBasicAuth(secretKey: string) {
+    return Buffer.from(`${secretKey}:`, 'utf8').toString('base64');
+  }
+
+  private parseTossApprovedAt(payload: Record<string, any>) {
+    const approvedAt = payload?.approvedAt;
+
+    if (typeof approvedAt !== 'string') return null;
+
+    const date = new Date(approvedAt);
+
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  private resolveTossApprovedAmount(payload: Record<string, any>) {
+    return Number(payload?.totalAmount ?? payload?.amount ?? payload?.balanceAmount ?? 0);
+  }
+
+  private resolveTossFailureCode(error: unknown) {
+    if (error instanceof BadRequestException) {
+      const response = error.getResponse();
+
+      if (typeof response === 'object' && response && 'code' in response) {
+        return String((response as any).code);
+      }
+    }
+
+    return 'TOSS_CONFIRM_FAILED';
+  }
+
+  private resolveTossFailureMessage(error: unknown) {
+    if (error instanceof Error) return error.message;
+    return 'Toss 결제 승인에 실패했습니다.';
+  }
+
+  private serializeTossError(error: unknown) {
+    if (error instanceof BadRequestException) {
+      return {
+        name: error.name,
+        message: error.message,
+        response: error.getResponse(),
+      };
+    }
+
+    if (error instanceof Error) {
+      return {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+      };
+    }
+
+    return {
+      message: String(error),
+    };
+  }
+
+  private async confirmTossWithProvider(input: {
+    paymentKey: string;
+    orderId: string;
+    amount: number;
+  }) {
+    const response = await fetch(`${this.getTossApiBaseUrl()}/v1/payments/confirm`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${this.encodeTossBasicAuth(this.getTossSecretKey())}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        paymentKey: input.paymentKey,
+        orderId: input.orderId,
+        amount: input.amount,
+      }),
+    });
+
+    const rawText = await response.text();
+    let payload: Record<string, any>;
+
+    try {
+      payload = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      payload = {
+        rawText,
+      };
+    }
+
+    if (!response.ok) {
+      throw new BadRequestException({
+        message: payload?.message ?? 'Toss 결제 승인 API 호출에 실패했습니다.',
+        code: payload?.code ?? `HTTP_${response.status}`,
+        tossResponse: payload,
+      });
+    }
+
+    if (payload?.orderId !== input.orderId) {
+      throw new BadRequestException({
+        message: 'Toss 승인 응답의 orderId가 요청값과 다릅니다.',
+        code: 'TOSS_ORDER_ID_MISMATCH',
+        tossResponse: payload,
+      });
+    }
+
+    const approvedAmount = this.resolveTossApprovedAmount(payload);
+
+    if (approvedAmount !== input.amount) {
+      throw new BadRequestException({
+        message: 'Toss 승인 응답의 결제 금액이 요청 금액과 다릅니다.',
+        code: 'TOSS_AMOUNT_MISMATCH',
+        expectedAmount: input.amount,
+        approvedAmount,
+        tossResponse: payload,
+      });
+    }
+
+    if (payload?.status !== 'DONE') {
+      throw new BadRequestException({
+        message: `Toss 결제 상태가 DONE이 아닙니다: ${payload?.status ?? '-'}`,
+        code: 'TOSS_STATUS_NOT_DONE',
+        tossResponse: payload,
+      });
+    }
+
+    return payload;
   }
 
   async publicConfirmTossPayment(dto: PublicConfirmTossPaymentDto) {
@@ -731,6 +914,10 @@ export class PaymentsService {
     }
 
     if (payment.status === PaymentStatus.SUCCESS) {
+      await this.tenantCouponsService.completeReservedCouponForInvoice({
+        sessionId: payment.invoice.sessionId,
+        invoiceId: payment.invoice.id,
+      });
       return {
         ok: true,
         alreadyConfirmed: true,
@@ -739,55 +926,68 @@ export class PaymentsService {
       };
     }
 
-    /**
-     * TODO: Toss 실제 승인 API 연동 위치
-     *
-     * 현재 publicConfirmTossPayment()는 개발 중 테스트를 위해
-     * Toss 서버에 실제 승인 요청을 보내지 않고 내부 DB만 결제 완료 처리한다.
-     *
-     * Toss 테스트/운영 키가 준비되면 아래 순서로 이 위치에 승인 로직을 추가한다.
-     *
-     * 1. 서버 환경변수에 TOSS_SECRET_KEY 추가
-     *    - 절대 NEXT_PUBLIC_* 로 노출하지 않는다.
-     *    - apps/api/.env 또는 배포 secret manager에만 저장한다.
-     *
-     * 2. Toss 승인 API 호출
-     *    - POST https://api.tosspayments.com/v1/payments/confirm
-     *    - Basic Auth username: TOSS_SECRET_KEY
-     *    - Basic Auth password: 빈 문자열
-     *    - body:
-     *      {
-     *        paymentKey: dto.paymentKey,
-     *        orderId: dto.orderId,
-     *        amount: dto.amount
-     *      }
-     *
-     * 3. Toss 응답 검증
-     *    - 응답 status가 DONE인지 확인
-     *    - 응답 orderId가 dto.orderId와 같은지 확인
-     *    - 응답 totalAmount 또는 amount가 dto.amount와 같은지 확인
-     *    - DB의 payment.amount와 dto.amount가 이미 같은지 위에서 확인했으므로
-     *      Toss 응답까지 다시 맞아야 최종 승인 처리한다.
-     *
-     * 4. 실패 시 처리
-     *    - Payment.status = FAILED
-     *    - failureCode / failureMessage 저장
-     *    - rawResponse에 Toss 실패 응답 저장
-     *    - Invoice / ParkingSession은 PAID로 바꾸지 않는다.
-     *
-     * 5. 성공 시 처리
-     *    - 아래 transaction 로직을 그대로 사용하되,
-     *      rawResponse.source를 public-toss-confirm 으로 변경하고
-     *      rawResponse에 실제 Toss 응답 전체 또는 필요한 필드를 저장한다.
-     *    - receipt.approvalNo에는 Toss 승인번호 또는 paymentKey를 저장한다.
-     *
-     * 보안상 중요한 점:
-     * - public-confirm endpoint는 공개 청구서 링크에서 호출되므로
-     *   반드시 invoiceId + orderId + amount + paymentKey를 모두 검증해야 한다.
-     * - 클라이언트가 보낸 amount만 믿으면 안 되고,
-     *   DB payment.amount와 Toss 응답 금액을 모두 비교해야 한다.
-     */
-    const paidAt = new Date();
+    if (payment.status !== PaymentStatus.PENDING) {
+      throw new BadRequestException(
+        'Payment is no longer pending. Prepare a new payment and try again.',
+      );
+    }
+
+    if (
+      Number(payment.invoice.unpaidAmount ?? 0) !== dto.amount ||
+      Number(payment.invoice.finalAmount ?? 0) -
+        Number(payment.invoice.paidAmount ?? 0) !==
+        dto.amount
+    ) {
+      throw new BadRequestException(
+        'Invoice amount changed. Prepare a new payment and try again.',
+      );
+    }
+
+    await this.tenantCouponsService.assertInvoiceCouponReservation({
+      sessionId: payment.invoice.sessionId,
+      invoiceMetadata: payment.invoice.metadata,
+    });
+
+    let tossApprovedPayment: Record<string, any>;
+
+    try {
+      tossApprovedPayment = await this.confirmTossWithProvider({
+        paymentKey: dto.paymentKey,
+        orderId: dto.orderId,
+        amount: dto.amount,
+      });
+    } catch (error) {
+      await this.prisma.payment
+        .update({
+          where: {
+            id: payment.id,
+          },
+          data: {
+            status: PaymentStatus.FAILED,
+            failedAt: new Date(),
+            failureCode: this.resolveTossFailureCode(error),
+            failureMessage: this.resolveTossFailureMessage(error),
+            rawResponse: {
+              source: 'public-toss-confirm',
+              paymentKey: dto.paymentKey,
+              orderId: dto.orderId,
+              amount: dto.amount,
+              invoiceId: dto.invoiceId,
+              error: this.serializeTossError(error),
+            } as any,
+          },
+        })
+        .catch(() => undefined);
+
+      await this.tenantCouponsService.releaseReservedCouponForSession({
+        sessionId: payment.invoice.sessionId,
+        reason: 'PAYMENT_CONFIRM_FAILED',
+      });
+
+      throw error;
+    }
+
+    const paidAt = this.parseTossApprovedAt(tossApprovedPayment) ?? new Date();
 
     const result = await this.prisma.$transaction(async (tx) => {
       const updatedPayment = await tx.payment.update({
@@ -799,12 +999,12 @@ export class PaymentsService {
           tossOrderId: dto.orderId,
           approvedAt: paidAt,
           rawResponse: {
-            source: 'public-toss-confirm-dev',
+            source: 'public-toss-confirm',
             paymentKey: dto.paymentKey,
             orderId: dto.orderId,
             amount: dto.amount,
             invoiceId: dto.invoiceId,
-            note: 'Toss secret key not configured yet. Real Toss approval call will be added later.',
+            tossApprovedPayment,
           } as any,
         },
       });
@@ -823,10 +1023,10 @@ export class PaymentsService {
               orderId: dto.orderId,
               amount: dto.amount,
               paidAt: paidAt.toISOString(),
-              source: 'public-toss-confirm-dev',
+              source: 'public-toss-confirm',
             },
             receipt: {
-              receiptNo: `TOSS-DEV-${Date.now()}`,
+              receiptNo: `TOSS-${Date.now()}`,
               invoiceId: payment.invoiceId,
               invoiceNo: payment.invoice!.invoiceNo,
               paymentId: updatedPayment.id,
@@ -836,7 +1036,7 @@ export class PaymentsService {
               paidAmount: dto.amount,
               paidAt: paidAt.toISOString(),
               approvalNo: dto.paymentKey,
-              source: 'public-toss-confirm-dev',
+              source: 'public-toss-confirm',
             },
           } as any,
         },
@@ -863,7 +1063,7 @@ export class PaymentsService {
               orderId: dto.orderId,
               amount: dto.amount,
               paidAt: paidAt.toISOString(),
-              source: 'public-toss-confirm-dev',
+              source: 'public-toss-confirm',
             },
           } as any,
         },
@@ -894,7 +1094,14 @@ export class PaymentsService {
       };
     });
 
+    await this.tenantCouponsService.completeReservedCouponForInvoice({
+      sessionId: result.session.id,
+      invoiceId: result.invoice.id,
+    });
+
     await this.publishPaymentConfirmedRealtime(result);
+
+    await this.ensureReceiptForSuccessfulPayment(result.payment.id);
 
     return {
       ok: true,
@@ -933,12 +1140,21 @@ export class PaymentsService {
     }
 
     if (payment.status === PaymentStatus.SUCCESS) {
+      await this.tenantCouponsService.completeReservedCouponForInvoice({
+        sessionId: payment.invoice.sessionId,
+        invoiceId: payment.invoice.id,
+      });
       return {
         ok: true,
         alreadyConfirmed: true,
         payment,
       };
     }
+
+    await this.tenantCouponsService.assertInvoiceCouponReservation({
+      sessionId: payment.invoice.sessionId,
+      invoiceMetadata: payment.invoice.metadata,
+    });
 
     const result = await this.prisma.$transaction(async (tx) => {
       const updatedPayment = await tx.payment.update({
@@ -999,6 +1215,11 @@ export class PaymentsService {
         invoice: updatedInvoice,
         session: updatedSession,
       };
+    });
+
+    await this.tenantCouponsService.completeReservedCouponForInvoice({
+      sessionId: result.session.id,
+      invoiceId: result.invoice.id,
     });
 
     await this.publishPaymentConfirmedRealtime(result);
@@ -1112,6 +1333,11 @@ export class PaymentsService {
           });
         });
 
+        await this.tenantCouponsService.completeReservedCouponForInvoice({
+          sessionId: found.invoice.sessionId,
+          invoiceId: found.invoice.id,
+        });
+
         await this.realtimePublisher.publish(WsEvents.PAYMENT_UPDATED, {
           paymentId: found.id,
           invoiceId: found.invoiceId,
@@ -1139,6 +1365,11 @@ export class PaymentsService {
         },
       });
 
+      await this.tenantCouponsService.releaseReservedCouponForSession({
+        sessionId: found.invoice.sessionId,
+        reason: 'PAYMENT_CANCELLED',
+      });
+
       await this.realtimePublisher.publish(WsEvents.PAYMENT_FAILED, {
         paymentId: found.id,
         invoiceId: found.invoiceId,
@@ -1152,6 +1383,74 @@ export class PaymentsService {
       ok: true,
       ignored: true,
       status,
+    };
+  }
+
+  async cancelPublicTossPayment(
+    invoiceId: string,
+    input: {
+      code?: string | null;
+      orderId?: string | null;
+      reason?: string | null;
+    } = {},
+  ) {
+    this.assertCloudPaymentAuthority();
+
+    const invoice = await this.prisma.invoice.findUnique({
+      where: { id: invoiceId },
+      include: {
+        session: true,
+        payments: true,
+      },
+    });
+
+    if (!invoice) {
+      throw new NotFoundException('Invoice not found');
+    }
+
+    if (invoice.status === InvoiceStatus.PAID || invoice.unpaidAmount <= 0) {
+      return {
+        ok: true,
+        alreadyPaid: true,
+        couponReleased: false,
+      };
+    }
+
+    const now = new Date();
+    const pendingPaymentIds = invoice.payments
+      .filter((payment) => payment.status === PaymentStatus.PENDING)
+      .filter(
+        (payment) => !input.orderId || payment.orderId === input.orderId,
+      )
+      .map((payment) => payment.id);
+
+    if (pendingPaymentIds.length > 0) {
+      await this.prisma.payment.updateMany({
+        where: {
+          id: { in: pendingPaymentIds },
+          status: PaymentStatus.PENDING,
+        },
+        data: {
+          status: PaymentStatus.CANCELLED,
+          cancelledAt: now,
+          failureCode: input.code ?? 'TOSS_CHECKOUT_CANCELLED',
+          failureMessage: input.reason ?? 'Toss checkout was not completed',
+        },
+      });
+    }
+
+    const releasedCoupon =
+      await this.tenantCouponsService.releaseReservedCouponForSession({
+        sessionId: invoice.sessionId,
+        reason: 'TOSS_CHECKOUT_CANCELLED',
+      });
+
+    return {
+      ok: true,
+      alreadyPaid: false,
+      cancelledPaymentCount: pendingPaymentIds.length,
+      couponReleased: Boolean(releasedCoupon),
+      couponId: releasedCoupon?.id ?? null,
     };
   }
 
@@ -1174,9 +1473,51 @@ export class PaymentsService {
       throw new BadRequestException('Invoice already fully paid');
     }
 
-    const existingPending = invoice.payments.find(
+    try {
+      await this.tenantCouponsService.assertInvoiceCouponReservation({
+        sessionId: invoice.sessionId,
+        invoiceMetadata: invoice.metadata,
+      });
+    } catch (error) {
+      await this.prisma.payment.updateMany({
+        where: {
+          invoiceId,
+          status: PaymentStatus.PENDING,
+        },
+        data: {
+          status: PaymentStatus.CANCELLED,
+          cancelledAt: new Date(),
+          failureCode: 'COUPON_RESERVATION_INVALID',
+          failureMessage: 'Coupon reservation expired before checkout',
+        },
+      });
+      throw error;
+    }
+
+    const pendingPayments = invoice.payments.filter(
       (payment) => payment.status === PaymentStatus.PENDING,
     );
+    const existingPending = pendingPayments.find(
+      (payment) => payment.amount === invoice.unpaidAmount,
+    );
+    const stalePendingIds = pendingPayments
+      .filter((payment) => payment.id !== existingPending?.id)
+      .map((payment) => payment.id);
+
+    if (stalePendingIds.length > 0) {
+      await this.prisma.payment.updateMany({
+        where: {
+          id: { in: stalePendingIds },
+          status: PaymentStatus.PENDING,
+        },
+        data: {
+          status: PaymentStatus.CANCELLED,
+          cancelledAt: new Date(),
+          failureCode: 'PAYMENT_AMOUNT_STALE',
+          failureMessage: 'Invoice amount changed before checkout',
+        },
+      });
+    }
 
     if (existingPending) {
       return existingPending;
@@ -1284,6 +1625,95 @@ export class PaymentsService {
     });
 
     return result;
+  }
+
+
+  private createAutoReceiptNo(now = new Date()) {
+    const ymd = now.toISOString().slice(0, 10).replace(/-/g, '');
+    const hms = now.toISOString().slice(11, 19).replace(/:/g, '');
+    return `RCPT-${ymd}${hms}-${randomUUID().slice(0, 8).toUpperCase()}`;
+  }
+
+  private resolveReceiptTaxAmounts(invoice: any, paymentAmount: number) {
+    const totalAmount = Math.max(
+      0,
+      Math.round(
+        Number(invoice?.finalAmount ?? invoice?.amount ?? paymentAmount ?? 0),
+      ),
+    );
+
+    const taxType = String(invoice?.taxType ?? 'VAT_INCLUDED');
+
+    if (taxType === 'TAX_EXEMPT') {
+      return {
+        taxType,
+        supplyAmount: Number(invoice?.supplyAmount ?? totalAmount),
+        taxAmount: 0,
+        totalAmount,
+      };
+    }
+
+    const fallbackSupplyAmount = Math.round((totalAmount * 10) / 11);
+    const supplyAmount = Number(invoice?.supplyAmount ?? fallbackSupplyAmount);
+    const taxAmount = Number(
+      invoice?.vatAmount ?? Math.max(0, totalAmount - supplyAmount),
+    );
+
+    return {
+      taxType: 'VAT_INCLUDED',
+      supplyAmount,
+      taxAmount,
+      totalAmount,
+    };
+  }
+
+  private async ensureReceiptForSuccessfulPayment(paymentId: string) {
+    const payment = await this.prisma.payment.findUnique({
+      where: {
+        id: paymentId,
+      },
+      include: {
+        invoice: true,
+        receipt: true,
+      },
+    });
+
+    if (!payment) {
+      return null;
+    }
+
+    if (payment.receipt) {
+      return payment.receipt;
+    }
+
+    if (payment.status !== 'SUCCESS') {
+      return null;
+    }
+
+    const invoice = payment.invoice as any;
+    const tax = this.resolveReceiptTaxAmounts(invoice, payment.amount);
+    const issuedAt = payment.approvedAt ?? new Date();
+
+    return this.prisma.receipt.create({
+      data: {
+        receiptNo: this.createAutoReceiptNo(issuedAt),
+        paymentId: payment.id,
+        invoiceId: payment.invoiceId,
+        sessionId: invoice?.sessionId ?? null,
+        status: 'ISSUED',
+        supplyAmount: tax.supplyAmount,
+        taxAmount: tax.taxAmount,
+        totalAmount: tax.totalAmount,
+        issuedAt,
+        metadata: {
+          source: 'payments.ensureReceiptForSuccessfulPayment',
+          taxType: tax.taxType,
+          paymentMethod: payment.method,
+          tossPaymentKey: payment.tossPaymentKey,
+          tossOrderId: payment.tossOrderId,
+        },
+      },
+    });
   }
 
   async issueReceipt(
@@ -1510,12 +1940,14 @@ export class PaymentsService {
   }
 
   private assertCloudPaymentAuthority() {
-    const appMode = (process.env.APP_MODE ?? 'cloud').toLowerCase();
     const paymentAuthority = (
       process.env.PAYMENT_AUTHORITY ?? 'cloud'
     ).toLowerCase();
 
-    if (appMode === 'edge' || paymentAuthority !== 'cloud') {
+    if (
+      isEdgeRuntimeProfile() ||
+      paymentAuthority !== 'cloud'
+    ) {
       throw new ForbiddenException(
         'Payment operations are only available in cloud mode',
       );

@@ -17,7 +17,7 @@ export default function SettingsPage({ role = 'admin' }: Props) {
     <main className="min-h-screen space-y-6 bg-slate-50 p-6 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
       <div>
         <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-          Settings
+          설정
         </h1>
         <p className="text-sm text-slate-500 dark:text-slate-400">
           {role === 'admin'
@@ -28,14 +28,14 @@ export default function SettingsPage({ role = 'admin' }: Props) {
 
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">
-          User Preferences
+          사용자 기본 설정
         </h2>
 
         <div className="mt-6 space-y-5">
           <label className="flex items-center justify-between rounded-2xl border border-slate-100 p-4 dark:border-slate-800">
             <div>
               <div className="font-medium text-slate-900 dark:text-slate-100">
-                Dark Mode
+                다크 모드
               </div>
               <div className="text-sm text-slate-500 dark:text-slate-400">
                 야간 운영 화면에 적합한 어두운 테마를 사용합니다.
@@ -56,7 +56,7 @@ export default function SettingsPage({ role = 'admin' }: Props) {
 
           <label className="block">
             <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-              Default Parking Lot
+              기본 주차장
             </span>
             <input
               value={defaultLotId}
@@ -72,7 +72,7 @@ export default function SettingsPage({ role = 'admin' }: Props) {
 
           <label className="block">
             <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-              Language
+              언어
             </span>
             <select
               value={language}

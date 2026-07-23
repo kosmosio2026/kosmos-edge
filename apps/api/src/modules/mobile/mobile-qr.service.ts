@@ -57,6 +57,12 @@ export class MobileQrService {
 
     const lot = qr.parkingLot;
 
+    if (!lot.isActive || lot.operationMode !== 'SENSOR') {
+      throw new BadRequestException(
+        '모바일 주차 등록은 센서 운영 주차장에서만 이용할 수 있습니다.',
+      );
+    }
+
     return {
       qrToken: qr.qrToken,
       parkingLot: {
@@ -322,6 +328,15 @@ export class MobileQrService {
 
     if (!qr || !qr.isActive) {
       throw new NotFoundException('Invalid or inactive QR code');
+    }
+
+    if (
+      !qr.parkingLot.isActive ||
+      qr.parkingLot.operationMode !== 'SENSOR'
+    ) {
+      throw new BadRequestException(
+        '모바일 주차 등록은 센서 운영 주차장에서만 이용할 수 있습니다.',
+      );
     }
 
     const space = await this.prisma.parkingSpace.findFirst({

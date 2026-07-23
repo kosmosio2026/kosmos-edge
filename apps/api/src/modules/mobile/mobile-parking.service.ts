@@ -1,3 +1,4 @@
+import { calculateTaxBreakdown } from '../billing/tax-breakdown';
 import {
   BadRequestException,
   Injectable,
@@ -6,10 +7,16 @@ import {
 import { Prisma, SessionStatus, SpaceStatus, Vehicle } from '@parking/db';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RegisterOccupiedSpaceDto } from './dto/register-occupied-space.dto';
+import { AutomaticDiscountService } from '../billing/automatic-discount.service';
+import { TenantCouponsService } from '../tenants/tenant-coupons.service';
 
 @Injectable()
 export class MobileParkingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly automaticDiscountService: AutomaticDiscountService,
+    private readonly tenantCouponsService: TenantCouponsService,
+  ) {}
 
   async getMyCurrentSession(userId: string) {
     return this.prisma.parkingSession.findFirst({
@@ -737,10 +744,35 @@ export class MobileParkingService {
     const watcherRewardBasisAmount =
       this.calculateWatcherRewardBasis(session, feePolicy);
 
-    const finalAmount = Math.max(
+    const amountBeforeAutomaticDiscount = Math.max(
       0,
       baseParkingAmount - registrationGraceDiscountAmount,
     );
+
+    const automaticDiscount =
+      await this.automaticDiscountService.calculateForSession({
+        sessionId: session.id,
+        baseParkingAmount,
+        amountBeforeAutomaticDiscount,
+        totalMinutes,
+        feePolicy,
+        now,
+      });
+
+    const tenantCoupon =
+      await this.tenantCouponsService.calculateReservedCouponDiscount({
+        sessionId: session.id,
+        amountBeforeCoupon: automaticDiscount.finalAmount,
+        baseParkingAmount,
+        automaticDiscountAmount: automaticDiscount.totalDiscountAmount,
+        totalMinutes,
+        feePolicy,
+        now,
+      });
+
+    const finalAmount = tenantCoupon.finalAmount;
+
+    const currentTaxBreakdown = calculateTaxBreakdown(finalAmount, feePolicy.taxType);
 
     return {
       current: {
@@ -769,8 +801,16 @@ export class MobileParkingService {
         totalMinutes,
         baseParkingAmount,
         registrationGraceDiscountAmount,
+        automaticDiscountAmount: automaticDiscount.totalDiscountAmount,
+        automaticDiscounts: automaticDiscount.applications,
+        tenantCouponDiscountAmount: tenantCoupon.discountAmount,
+        tenantCoupon,
         watcherRewardBasisAmount,
         finalAmount,
+        taxType: currentTaxBreakdown.taxType,
+        supplyAmount: currentTaxBreakdown.supplyAmount,
+        vatAmount: currentTaxBreakdown.vatAmount,
+        taxExemptAmount: currentTaxBreakdown.taxExemptAmount,
         policy: {
           id: feePolicy.id,
           name: feePolicy.name,
@@ -890,7 +930,14 @@ export class MobileParkingService {
     const include = {
       feePolicy: true,
       vehicle: true,
-      invoice: true,
+      invoice: {
+        include: {
+          payments: {
+            where: { status: 'PENDING' },
+            orderBy: { createdAt: 'desc' },
+          },
+        },
+      },
       ParkingSpace: {
         include: {
           section: {
@@ -916,6 +963,57 @@ export class MobileParkingService {
 
     if (!session) {
       throw new NotFoundException('Parking session not found');
+    }
+
+    const pendingPayment = session.invoice?.payments?.[0] ?? null;
+    const existingInvoiceStatus = String(session.invoice?.status ?? '').toUpperCase();
+
+    if (
+      !options?.exitTime &&
+      session.invoice &&
+      pendingPayment &&
+      Number(session.invoice.unpaidAmount ?? 0) > 0 &&
+      !['PAID', 'VOID', 'CANCELLED'].includes(existingInvoiceStatus)
+    ) {
+      try {
+        await this.tenantCouponsService.assertInvoiceCouponReservation({
+          sessionId: session.id,
+          invoiceMetadata: session.invoice.metadata,
+        });
+
+        const frozenCalculation =
+          session.invoice.metadata &&
+          typeof session.invoice.metadata === 'object' &&
+          !Array.isArray(session.invoice.metadata)
+            ? (session.invoice.metadata as Record<string, unknown>)
+            : {};
+
+        return {
+          session,
+          invoice: session.invoice,
+          calculation: {
+            ...frozenCalculation,
+            frozenByPendingPayment: true,
+            pendingPaymentId: pendingPayment.id,
+            pendingPaymentOrderId: pendingPayment.orderId,
+          },
+        };
+      } catch (error) {
+        if (!(error instanceof BadRequestException)) throw error;
+
+        await this.prisma.payment.updateMany({
+          where: {
+            id: pendingPayment.id,
+            status: 'PENDING',
+          },
+          data: {
+            status: 'CANCELLED',
+            cancelledAt: new Date(),
+            failureCode: 'COUPON_RESERVATION_INVALID',
+            failureMessage: 'Coupon reservation expired before checkout',
+          },
+        });
+      }
     }
 
     const parkingLotId = session.ParkingSpace?.section?.parkingLot?.id;
@@ -965,10 +1063,39 @@ export class MobileParkingService {
     const watcherRewardBasisAmount =
       this.calculateWatcherRewardBasis(session, feePolicy);
 
-    const finalAmount = Math.max(
+    const amountBeforeAutomaticDiscount = Math.max(
       0,
       baseParkingAmount - registrationGraceDiscountAmount,
     );
+
+    const automaticDiscount =
+      await this.automaticDiscountService.calculateForSession({
+        sessionId: session.id,
+        baseParkingAmount,
+        amountBeforeAutomaticDiscount,
+        totalMinutes,
+        feePolicy,
+        now: exitTime,
+      });
+
+    const tenantCoupon =
+      await this.tenantCouponsService.calculateReservedCouponDiscount({
+        sessionId: session.id,
+        amountBeforeCoupon: automaticDiscount.finalAmount,
+        baseParkingAmount,
+        automaticDiscountAmount: automaticDiscount.totalDiscountAmount,
+        totalMinutes,
+        feePolicy,
+        now: exitTime,
+      });
+
+    const finalAmount = tenantCoupon.finalAmount;
+    const totalDiscountAmount =
+      registrationGraceDiscountAmount +
+      automaticDiscount.totalDiscountAmount +
+      tenantCoupon.discountAmount;
+
+    const taxBreakdown = calculateTaxBreakdown(finalAmount, feePolicy.taxType);
 
     const sessionInvoices = await this.prisma.invoice.findMany({
       where: {
@@ -997,6 +1124,7 @@ export class MobileParkingService {
       null;
 
     const additionalFeeAmount = Math.max(0, finalAmount - alreadyPaidAmount);
+    const additionalFeeTaxBreakdown = calculateTaxBreakdown(additionalFeeAmount, feePolicy.taxType);
     const shouldCreateAdditionalFee =
       alreadyPaidAmount > 0 && additionalFeeAmount > 0;
 
@@ -1037,7 +1165,15 @@ export class MobileParkingService {
       directRegistrationDiscountAmount: registrationGraceDiscountAmount,
       registrationGraceDiscountAmount,
       watcherRewardBasisAmount,
+      automaticDiscountAmount: automaticDiscount.totalDiscountAmount,
+      automaticDiscounts: automaticDiscount.applications,
+      tenantCouponDiscountAmount: tenantCoupon.discountAmount,
+      tenantCoupon,
       finalAmount,
+      taxType: taxBreakdown.taxType,
+      supplyAmount: taxBreakdown.supplyAmount,
+      vatAmount: taxBreakdown.vatAmount,
+      taxExemptAmount: taxBreakdown.taxExemptAmount,
       paidAmount,
       unpaidAmount,
       previousUnpaidAmount,
@@ -1064,6 +1200,7 @@ export class MobileParkingService {
           feePolicy.authorityRegistrationGraceDiscountEnabled,
         watcherRewardGraceFeeEnabled:
           feePolicy.watcherRewardGraceFeeEnabled,
+        taxType: feePolicy.taxType,
       },
       session: {
         id: session.id,
@@ -1092,6 +1229,10 @@ export class MobileParkingService {
               authorityRegistrationSurchargeAmount: 0,
               watcherRewardBasisAmount: 0,
               finalAmount: additionalFeeAmount,
+              taxType: additionalFeeTaxBreakdown.taxType as any,
+              supplyAmount: additionalFeeTaxBreakdown.supplyAmount,
+              vatAmount: additionalFeeTaxBreakdown.vatAmount,
+              taxExemptAmount: additionalFeeTaxBreakdown.taxExemptAmount,
               issuedAt: unpaidAdditionalInvoice.issuedAt ?? new Date(),
               paidAt: null,
               metadata: {
@@ -1129,6 +1270,10 @@ export class MobileParkingService {
               authorityRegistrationSurchargeAmount: 0,
               watcherRewardBasisAmount: 0,
               finalAmount: additionalFeeAmount,
+              taxType: additionalFeeTaxBreakdown.taxType as any,
+              supplyAmount: additionalFeeTaxBreakdown.supplyAmount,
+              vatAmount: additionalFeeTaxBreakdown.vatAmount,
+              taxExemptAmount: additionalFeeTaxBreakdown.taxExemptAmount,
               issuedAt: new Date(),
               dueAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
               paidAt: null,
@@ -1160,7 +1305,7 @@ export class MobileParkingService {
             data: {
               status: invoiceStatus,
               amount: finalAmount,
-              discountAmount: registrationGraceDiscountAmount,
+              discountAmount: totalDiscountAmount,
               paidAmount: alreadyPaidAmount,
               unpaidAmount,
               baseParkingAmount,
@@ -1168,6 +1313,10 @@ export class MobileParkingService {
               authorityRegistrationSurchargeAmount: 0,
               watcherRewardBasisAmount,
               finalAmount,
+              taxType: taxBreakdown.taxType as any,
+              supplyAmount: taxBreakdown.supplyAmount,
+              vatAmount: taxBreakdown.vatAmount,
+              taxExemptAmount: taxBreakdown.taxExemptAmount,
               issuedAt: session.invoice.issuedAt ?? new Date(),
               paidAt: invoicePaidAt,
               metadata: pricingSnapshot as any,
@@ -1179,7 +1328,7 @@ export class MobileParkingService {
               sessionId: session.id,
               status: invoiceStatus,
               amount: finalAmount,
-              discountAmount: registrationGraceDiscountAmount,
+              discountAmount: totalDiscountAmount,
               paidAmount: alreadyPaidAmount,
               unpaidAmount,
               baseParkingAmount,
@@ -1187,6 +1336,10 @@ export class MobileParkingService {
               authorityRegistrationSurchargeAmount: 0,
               watcherRewardBasisAmount,
               finalAmount,
+              taxType: taxBreakdown.taxType as any,
+              supplyAmount: taxBreakdown.supplyAmount,
+              vatAmount: taxBreakdown.vatAmount,
+              taxExemptAmount: taxBreakdown.taxExemptAmount,
               issuedAt: new Date(),
               paidAt: invoicePaidAt,
               metadata: pricingSnapshot as any,
@@ -1214,6 +1367,20 @@ export class MobileParkingService {
         },
     });
 
+    await this.automaticDiscountService.replaceSessionSnapshots({
+      sessionId: session.id,
+      invoiceId: invoice.id,
+      result: automaticDiscount,
+    });
+
+    if (unpaidAmount <= 0 && tenantCoupon.couponId) {
+      await this.tenantCouponsService.completeReservedCouponForInvoice({
+        sessionId: session.id,
+        invoiceId: invoice.id,
+        actorUserId: session.userId,
+      });
+    }
+
     return {
       session: updatedSession,
       invoice,
@@ -1223,6 +1390,10 @@ export class MobileParkingService {
         directRegistrationDiscountAmount: registrationGraceDiscountAmount,
         registrationGraceDiscountAmount,
         watcherRewardBasisAmount,
+        automaticDiscountAmount: automaticDiscount.totalDiscountAmount,
+        automaticDiscounts: automaticDiscount.applications,
+        tenantCouponDiscountAmount: tenantCoupon.discountAmount,
+        tenantCoupon,
         finalAmount,
         paidAmount,
         unpaidAmount,

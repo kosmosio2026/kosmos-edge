@@ -1,7 +1,14 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { SessionStatus } from '@parking/db';
+import {
+  enqueueEdgeParkingSessionSync,
+  enqueueEdgeUnpaidExitSync,
+} from '../../common/sync/edge-parking-session-sync';
+
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { SessionStatus, SpaceStatus } from '@parking/db';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { AuthUser } from '../../common/types/auth-user.type';
+import { ParkingFeeCalculatorService } from '../billing/parking-fee-calculator.service';
+import { BillingService } from '../billing/billing.service';
 
 type GetSessionsParams = {
   user?: AuthUser;
@@ -12,6 +19,18 @@ type GetSessionsParams = {
 type RegisterSessionInput = {
   plateNumber?: string | null;
   contactNumber?: string | null;
+};
+
+type ManualEntryInput = {
+  parkingSpaceId?: string | null;
+  plateNumber?: string | null;
+  contactNumber?: string | null;
+};
+
+type ManualExitInput = {
+  collectedAmount?: number | string | null;
+  paymentMethod?: string | null;
+  note?: string | null;
 };
 
 function getUserRoles(user?: AuthUser | null): string[] {
@@ -33,9 +52,22 @@ function isOperator(user?: AuthUser | null) {
   return getUserRoles(user).includes('OPERATOR');
 }
 
+function normalizeManualPaymentMethod(value?: string | null) {
+  const method = String(value ?? 'CARD').trim().toUpperCase();
+
+  if (method === 'BANK_TRANSFER') return 'TRANSFER';
+  if (['CARD', 'CASH', 'TRANSFER'].includes(method)) return method;
+
+  return 'CARD';
+}
+
 @Injectable()
 export class ParkingSessionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly feeCalculator: ParkingFeeCalculatorService,
+    private readonly billingService: BillingService,
+  ) {}
 
   async getRecentEvents(params: { limit?: number } = {}) {
     const limit = Math.min(Math.max(Number(params.limit ?? 10), 1), 30);
@@ -145,36 +177,47 @@ export class ParkingSessionsService {
 
     return {};
   }
+  private assertManualOperationRole(user: AuthUser) {
+    if (isAdmin(user) || isManager(user) || isOperator(user)) {
+      return;
+    }
 
-  private async calculateExpectedFeeForSession(session: any) {
-    const entryTime = session.entryTime ? new Date(session.entryTime) : null;
-    if (!entryTime || Number.isNaN(entryTime.getTime())) return 0;
+    throw new ForbiddenException('수동 입차/출차 권한이 없습니다.');
+  }
 
-    const totalMinutes = Math.max(
-      0,
-      Math.ceil((Date.now() - entryTime.getTime()) / 60000),
-    );
+  private async assertManualSpaceAccess(user: AuthUser, input: {
+    parkingLotId: string;
+    sectionId: string;
+  }) {
+    if (isAdmin(user)) return;
 
-    const baseMinutes = 30;
-    const baseFee = 1000;
-    const unitMinutes = 10;
-    const unitFee = 500;
-    const dailyMax = 20000;
+    if (isManager(user)) {
+      const count = await this.prisma.managerParkingLot.count({
+        where: {
+          managerProfileUserId: user.sub,
+          parkingLotId: input.parkingLotId,
+        },
+      });
 
-    const oneDayFee = (minutes: number) => {
-      if (minutes <= 0) return 0;
-      if (minutes <= baseMinutes) return baseFee;
+      if (count > 0) return;
+    }
 
-      const amount =
-        baseFee + Math.ceil((minutes - baseMinutes) / unitMinutes) * unitFee;
+    if (isOperator(user)) {
+      const count = await this.prisma.operatorParkingSection.count({
+        where: {
+          operatorProfileUserId: user.sub,
+          sectionId: input.sectionId,
+        },
+      });
 
-      return Math.min(amount, dailyMax);
-    };
+      if (count > 0) return;
+    }
 
-    const fullDays = Math.floor(totalMinutes / 1440);
-    const rest = totalMinutes % 1440;
+    throw new ForbiddenException('해당 주차면에 대한 수동 입차/출차 권한이 없습니다.');
+  }
 
-    return fullDays * dailyMax + oneDayFee(rest);
+  private createManualSessionNo() {
+    return `MANUAL-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
   }
 
   async getSessions(params: GetSessionsParams = {}) {
@@ -299,15 +342,9 @@ export class ParkingSessionsService {
 
         const metadata = (session.metadata ?? {}) as any;
         const latestInvoice = session.invoice ?? null;
-        let accruedFeeAmount: number | null = null;
-        if (session.status === SessionStatus.ACTIVE) {
-          try {
-            accruedFeeAmount = await this.calculateExpectedFeeForSession(session);
-          } catch (error) {
-            console.error('[parking-sessions] expected fee calculation failed', error);
-            accruedFeeAmount = 0;
-          }
-        }
+        const feeSummary = await this.feeCalculator.summarize(session);
+        const accruedFeeAmount =
+          session.status === SessionStatus.ACTIVE ? feeSummary.expectedFee : null;
         const billedAmount = Number(
           latestInvoice?.amount ?? session.amount ?? 0,
         );
@@ -324,6 +361,11 @@ export class ParkingSessionsService {
         return {
           id: session.id,
           sessionNo: session.sessionNo,
+          invoiceId: latestInvoice?.id ?? null,
+          invoiceNo: latestInvoice?.invoiceNo ?? null,
+          invoiceStatus: latestInvoice?.status ?? null,
+          receiptId: latestInvoice?.status === 'PAID' ? latestInvoice.id : null,
+          paidAt: latestInvoice?.paidAt ?? null,
 
           plateNumber:
             session.vehicle?.plateNumber ?? session.plateNumber ?? null,
@@ -354,6 +396,9 @@ export class ParkingSessionsService {
           accruedFeeAmount,
           expectedFee: accruedFeeAmount,
           estimatedFee: accruedFeeAmount,
+          feePolicyId: feeSummary.feePolicyId,
+          feePolicyName: feeSummary.feePolicyName,
+          feePolicySource: feeSummary.feePolicySource,
           sectionCode: session.ParkingSpace?.section?.code ?? null,
           parkingSectionCode: session.ParkingSpace?.section?.code ?? null,
           latestInvoice: latestInvoice
@@ -522,6 +567,72 @@ export class ParkingSessionsService {
     };
   }
 
+  async recordActionLog(
+    userId: string,
+    sessionId: string,
+    dto: {
+      type?: string;
+      note?: string;
+      action?: string;
+      reason?: string;
+      elapsedMinutes?: number;
+      paidExitMinutes?: number;
+    },
+  ) {
+    const session = await this.prisma.parkingSession.findUnique({
+      where: { id: sessionId },
+      include: {
+        invoice: true,
+        ParkingSpace: {
+          include: {
+            section: {
+              include: {
+                parkingLot: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Parking session not found');
+    }
+
+    const type = String(dto.type ?? 'PAID_EXIT_CHECK').trim() || 'PAID_EXIT_CHECK';
+    const now = new Date();
+
+    const event = await this.prisma.parkingSessionEvent.create({
+      data: {
+        sessionId: session.id,
+        type,
+        source: 'console',
+        payload: {
+          action: dto.action ?? 'FIELD_CHECK',
+          reason: dto.reason ?? 'PAID_WITHOUT_EXIT',
+          note: dto.note ?? null,
+          userId,
+          elapsedMinutes: dto.elapsedMinutes ?? null,
+          paidExitMinutes: dto.paidExitMinutes ?? null,
+          sessionStatus: session.status,
+          invoiceId: session.invoice?.id ?? null,
+          invoiceNo: session.invoice?.invoiceNo ?? null,
+          invoiceStatus: session.invoice?.status ?? null,
+          paidAt: session.invoice?.paidAt ?? null,
+          parkingLotName: session.ParkingSpace?.section?.parkingLot?.name ?? null,
+          sectionCode: session.ParkingSpace?.section?.code ?? null,
+          parkingSpaceCode: session.ParkingSpace?.code ?? session.ParkingSpace?.number ?? null,
+          recordedAt: now.toISOString(),
+        },
+      },
+    });
+
+    return {
+      ok: true,
+      event,
+    };
+  }
+
   async recordManualPayment(
     userId: string,
     sessionId: string,
@@ -536,6 +647,12 @@ export class ParkingSessionsService {
       where: { id: sessionId },
       include: {
         invoice: true,
+        invoices: {
+          orderBy: {
+            createdAt: 'desc',
+          },
+          take: 1,
+        },
       },
     });
 
@@ -543,7 +660,7 @@ export class ParkingSessionsService {
       throw new NotFoundException('Parking session not found');
     }
 
-    const invoice = session.invoice;
+    const invoice = session.invoice ?? session.invoices?.[0] ?? null;
 
     if (!invoice) {
       throw new BadRequestException('Invoice is required before manual payment registration');
@@ -563,11 +680,7 @@ export class ParkingSessionsService {
       throw new BadRequestException('Payment amount cannot exceed unpaid amount');
     }
 
-    const paymentMethod = String(input.paymentMethod ?? 'CARD').toUpperCase();
-
-    if (!['CARD', 'CASH', 'TRANSFER'].includes(paymentMethod)) {
-      throw new BadRequestException('paymentMethod must be CARD, CASH, or TRANSFER');
-    }
+    const paymentMethod = normalizeManualPaymentMethod(input.paymentMethod);
 
     const collectedAt = input.collectedAt
       ? new Date(input.collectedAt)
@@ -582,6 +695,13 @@ export class ParkingSessionsService {
     const nextUnpaidAmount = Math.max(0, invoice.unpaidAmount - amount);
     const nextInvoiceStatus =
       nextUnpaidAmount <= 0 ? 'PAID' : 'PARTIALLY_PAID';
+
+    const nextSessionStatus =
+      session.exitTime || session.status === SessionStatus.CLOSED
+        ? SessionStatus.CLOSED
+        : nextUnpaidAmount <= 0
+          ? SessionStatus.PAID
+          : session.status;
 
     const result = await this.prisma.$transaction(async (tx) => {
       const manualPayment = await tx.invoiceManualPayment.create({
@@ -604,6 +724,9 @@ export class ParkingSessionsService {
           paidAt: nextUnpaidAmount <= 0 ? collectedAt : invoice.paidAt,
           metadata: {
             ...((invoice.metadata as any) ?? {}),
+            paidAmount: nextPaidAmount,
+            unpaidAmount: nextUnpaidAmount,
+            invoiceStatus: nextInvoiceStatus,
             manualPayment: {
               lastManualPaymentId: manualPayment.id,
               amount,
@@ -619,7 +742,8 @@ export class ParkingSessionsService {
       const updatedSession = await tx.parkingSession.update({
         where: { id: session.id },
         data: {
-          status: nextUnpaidAmount <= 0 ? ('PAID' as any) : (session.status as any),
+          status: nextSessionStatus as any,
+          primaryInvoiceId: updatedInvoice.id,
           paidAmount: Number(session.paidAmount ?? 0) + amount,
           unpaidAmount: nextUnpaidAmount,
           metadata: {
@@ -679,6 +803,570 @@ export class ParkingSessionsService {
     };
   }
 
+  private async resolveMemberVehicleForSession(plateNumber?: string | null) {
+    const normalizedPlate = plateNumber?.trim();
+    if (!normalizedPlate) {
+      return { userId: null, vehicleId: null };
+    }
+
+    const vehicle = await this.prisma.vehicle.findUnique({
+      where: { plateNumber: normalizedPlate },
+      include: {
+        memberProfile: {
+          select: { userId: true },
+        },
+        userLinks: {
+          orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
+          include: {
+            user: {
+              select: {
+                id: true,
+                memberProfile: { select: { id: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!vehicle) {
+      return { userId: null, vehicleId: null };
+    }
+
+    const linkedMemberUserId =
+      vehicle.memberProfile?.userId ??
+      vehicle.userLinks.find((link) => Boolean(link.user.memberProfile))?.userId ??
+      null;
+
+    return {
+      userId: linkedMemberUserId,
+      vehicleId: linkedMemberUserId ? vehicle.id : null,
+    };
+  }
+
+  async manualEntry(user: AuthUser, input: ManualEntryInput) {
+    this.assertManualOperationRole(user);
+
+    const parkingSpaceId = input.parkingSpaceId?.trim();
+    if (!parkingSpaceId) {
+      throw new BadRequestException('주차면 ID는 필수입니다.');
+    }
+
+    const space = await this.prisma.parkingSpace.findUnique({
+      where: { id: parkingSpaceId },
+      include: {
+        section: {
+          include: {
+            parkingLot: true,
+          },
+        },
+      },
+    });
+
+    if (!space) {
+      throw new NotFoundException('Parking space not found');
+    }
+
+    const parkingLot = space.section?.parkingLot;
+    if (!parkingLot) {
+      throw new BadRequestException('주차면의 주차장 정보를 확인하지 못했습니다.');
+    }
+
+    if ((parkingLot as any).operationMode !== 'MANUAL') {
+      throw new BadRequestException('수동 운영 방식 주차장에서만 입차 등록할 수 있습니다.');
+    }
+
+    await this.assertManualSpaceAccess(user, {
+      parkingLotId: parkingLot.id,
+      sectionId: space.sectionId,
+    });
+
+    const activeSession = await this.prisma.parkingSession.findFirst({
+      where: {
+        parkingSpaceId,
+        status: {
+          in: [SessionStatus.ACTIVE, SessionStatus.PAID],
+        },
+        exitTime: null,
+      },
+      select: {
+        id: true,
+        sessionNo: true,
+      },
+    });
+
+    if (activeSession) {
+      throw new BadRequestException('이미 진행 중인 주차 세션이 있는 주차면입니다.');
+    }
+
+    const now = new Date();
+    const plateNumber = input.plateNumber?.trim() || null;
+    const contactNumber = input.contactNumber?.trim() || null;
+    const hasRegistration = Boolean(plateNumber || contactNumber);
+    const memberVehicle = await this.resolveMemberVehicleForSession(plateNumber);
+
+    if (!hasRegistration) {
+      throw new BadRequestException('차량번호 또는 연락처를 입력하세요.');
+    }
+
+    const session = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.parkingSession.create({
+        data: {
+          sessionNo: this.createManualSessionNo(),
+          parkingSpaceId,
+          status: SessionStatus.ACTIVE,
+          entryTime: now,
+          entrySource: 'MANUAL',
+          manualEntryAt: now,
+          manualEntryByUserId: user.sub,
+          plateNumber,
+          contactPhone: contactNumber,
+          userId: memberVehicle.userId,
+          vehicleId: memberVehicle.vehicleId,
+          isRegistered: hasRegistration,
+          registeredAt: hasRegistration ? now : null,
+          registrationStatus: hasRegistration
+            ? ('REGISTERED_BY_OPERATOR' as any)
+            : ('UNREGISTERED' as any),
+          registrationMethod: hasRegistration
+            ? ('OPERATOR_MANUAL' as any)
+            : null,
+          registeredByUserId: hasRegistration ? user.sub : null,
+          metadata: {
+            entrySource: 'MANUAL',
+            manualEntryAt: now.toISOString(),
+            manualEntryByUserId: user.sub,
+            operationMode: 'MANUAL',
+            parkingLotId: parkingLot.id,
+            parkingLotCode: parkingLot.code,
+            parkingLotName: parkingLot.name,
+            sectionId: space.sectionId,
+            parkingSpaceId,
+            plateNumber,
+            contactNumber,
+            linkedMemberUserId: memberVehicle.userId,
+            linkedVehicleId: memberVehicle.vehicleId,
+          } as any,
+        },
+        include: {
+          ParkingSpace: {
+            include: {
+              section: {
+                include: {
+                  parkingLot: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      await tx.parkingSessionEvent.create({
+        data: {
+          sessionId: created.id,
+          type: 'parking.session.manual_entry_registered',
+          source: 'operator',
+          payload: {
+            parkingSpaceId,
+            parkingLotId: parkingLot.id,
+            sectionId: space.sectionId,
+            registeredByUserId: user.sub,
+            plateNumber,
+            contactNumber,
+            occurredAt: now.toISOString(),
+          } as any,
+        },
+      });
+
+      await tx.parkingSpace.update({
+        where: { id: parkingSpaceId },
+        data: {
+          status: SpaceStatus.OCCUPIED,
+        },
+      });
+
+      return tx.parkingSession.findUniqueOrThrow({
+        where: { id: created.id },
+        include: {
+          ParkingSpace: {
+            include: {
+              section: {
+                include: {
+                  parkingLot: true,
+                },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    await enqueueEdgeParkingSessionSync(
+      this.prisma,
+      {
+        eventType:
+          'PARKING_SESSION_ENTERED_FROM_EDGE',
+        session,
+        calculation: null,
+        source:
+          'MANUAL_OPERATION',
+      },
+    );
+
+    return {
+      ok: true,
+      item: session,
+    };
+  }
+
+  async manualExit(user: AuthUser, sessionId: string, input: ManualExitInput) {
+    this.assertManualOperationRole(user);
+
+    const session = await this.prisma.parkingSession.findUnique({
+      where: { id: sessionId },
+      include: {
+        ParkingSpace: {
+          include: {
+            section: {
+              include: {
+                parkingLot: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Parking session not found');
+    }
+
+    if (session.entrySource !== 'MANUAL') {
+      throw new BadRequestException('수동 입차 세션만 수동 출차 처리할 수 있습니다.');
+    }
+
+    if (session.exitTime) {
+      throw new BadRequestException('이미 출차 처리된 세션입니다.');
+    }
+
+    if (
+      session.status !== SessionStatus.ACTIVE &&
+      session.status !== SessionStatus.PAID
+    ) {
+      throw new BadRequestException(
+        '진행 중이거나 결제 완료된 세션만 수동 출차 처리할 수 있습니다.',
+      );
+    }
+
+    const space = session.ParkingSpace;
+    const parkingLot = space?.section?.parkingLot;
+
+    if (!space || !parkingLot) {
+      throw new BadRequestException('세션의 주차면 정보를 확인하지 못했습니다.');
+    }
+
+    if ((parkingLot as any).operationMode !== 'MANUAL') {
+      throw new BadRequestException('수동 운영 방식 주차장에서만 출차 등록할 수 있습니다.');
+    }
+
+    await this.assertManualSpaceAccess(user, {
+      parkingLotId: parkingLot.id,
+      sectionId: space.sectionId,
+    });
+
+    const now = new Date();
+    const linkedPrimaryInvoice = session.primaryInvoiceId
+      ? await this.prisma.invoice.findUnique({
+          where: { id: session.primaryInvoiceId },
+        })
+      : null;
+
+    const existingPrimaryInvoice =
+      linkedPrimaryInvoice?.status === 'PAID' &&
+      Number(linkedPrimaryInvoice.unpaidAmount ?? 0) <= 0
+        ? linkedPrimaryInvoice
+        : await this.prisma.invoice.findFirst({
+            where: {
+              sessionId: session.id,
+              status: 'PAID' as any,
+              unpaidAmount: 0,
+            },
+            orderBy: [
+              {
+                paidAt: 'desc',
+              },
+              {
+                createdAt: 'desc',
+              },
+            ],
+          });
+    const sessionMetadata = (session.metadata ?? {}) as any;
+    const paidExitGraceUntilRaw = sessionMetadata.paidExitGraceUntil;
+    const paidExitGraceUntil =
+      typeof paidExitGraceUntilRaw === 'string' && paidExitGraceUntilRaw.trim()
+        ? new Date(paidExitGraceUntilRaw)
+        : null;
+    const hasFullyPaidPrimaryInvoice =
+      existingPrimaryInvoice?.status === 'PAID' &&
+      Number(existingPrimaryInvoice.unpaidAmount ?? 0) <= 0;
+
+    if (
+      hasFullyPaidPrimaryInvoice &&
+      paidExitGraceUntil &&
+      !Number.isNaN(paidExitGraceUntil.getTime()) &&
+      now.getTime() > paidExitGraceUntil.getTime()
+    ) {
+      throw new BadRequestException(
+        '결제 후 출차 유예시간이 만료되었습니다. 기존 결제 청구서는 변경할 수 없으므로 추가요금 정산 후 출차하세요.',
+      );
+    }
+
+    const preservePaidPrimaryInvoice = Boolean(
+      hasFullyPaidPrimaryInvoice && existingPrimaryInvoice,
+    );
+    const entryTime = session.entryTime ?? session.createdAt;
+    const totalMinutes = Math.max(
+      1,
+      Math.ceil((now.getTime() - entryTime.getTime()) / 1000 / 60),
+    );
+
+    const rawAmount =
+      input.collectedAmount === null || input.collectedAmount === undefined || input.collectedAmount === ''
+        ? null
+        : Number(input.collectedAmount);
+
+    if (rawAmount !== null && (!Number.isFinite(rawAmount) || rawAmount < 0)) {
+      throw new BadRequestException('수금 금액은 0 이상의 숫자로 입력하세요.');
+    }
+
+    const collectedAmount = rawAmount === null ? null : Math.floor(rawAmount);
+    const paymentMethod =
+      collectedAmount !== null && collectedAmount > 0
+        ? normalizeManualPaymentMethod(input.paymentMethod)
+        : null;
+    const note = input.note?.trim() || null;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const closed = await tx.parkingSession.update({
+        where: { id: session.id },
+        data: {
+          status: SessionStatus.CLOSED,
+          exitTime: now,
+          billingClosedAt: now,
+          totalMinutes,
+          exitSource: 'MANUAL',
+          manualExitAt: now,
+          manualExitByUserId: user.sub,
+          metadata: {
+            ...((session.metadata as any) ?? {}),
+            exitSource: 'MANUAL',
+            manualExitAt: now.toISOString(),
+            manualExitByUserId: user.sub,
+            manualExitCollectedAmount: collectedAmount,
+            manualExitPaymentMethod: paymentMethod,
+            manualExitNote: note,
+            totalMinutes,
+          } as any,
+        },
+        include: {
+          ParkingSpace: {
+            include: {
+              section: {
+                include: {
+                  parkingLot: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      await tx.parkingSessionEvent.create({
+        data: {
+          sessionId: closed.id,
+          type: 'parking.session.manual_exit_registered',
+          source: 'operator',
+          payload: {
+            parkingSpaceId: closed.parkingSpaceId,
+            parkingLotId: parkingLot.id,
+            sectionId: space.sectionId,
+            exitedByUserId: user.sub,
+            exitTime: now.toISOString(),
+            totalMinutes,
+            collectedAmount,
+            paymentMethod,
+            note,
+          } as any,
+        },
+      });
+
+      await tx.parkingSpace.update({
+        where: { id: space.id },
+        data: {
+          status: SpaceStatus.EMPTY,
+        },
+      });
+
+      return tx.parkingSession.findUniqueOrThrow({
+        where: { id: closed.id },
+        include: {
+          ParkingSpace: {
+            include: {
+              section: {
+                include: {
+                  parkingLot: true,
+                },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    let manualPaymentResult: Awaited<ReturnType<ParkingSessionsService['recordManualPayment']>> | null = null;
+
+    if (!preservePaidPrimaryInvoice) {
+      await this.billingService.finalizeInvoiceForSessionId(updated.id, {
+        exitTime: now,
+      });
+    }
+
+    const primaryInvoice = preservePaidPrimaryInvoice
+      ? existingPrimaryInvoice
+      : await this.prisma.invoice.findFirst({
+          where: {
+            sessionId: updated.id,
+          },
+          orderBy: {
+            createdAt: 'desc',
+          },
+        });
+
+    if (primaryInvoice) {
+      await this.prisma.parkingSession.update({
+        where: {
+          id: updated.id,
+        },
+        data: {
+          primaryInvoiceId: primaryInvoice.id,
+          amount: primaryInvoice.amount,
+          paidAmount: primaryInvoice.paidAmount,
+          unpaidAmount: primaryInvoice.unpaidAmount,
+          metadata: {
+            ...((updated.metadata as any) ?? {}),
+            invoiceId: primaryInvoice.id,
+            invoiceNo: primaryInvoice.invoiceNo,
+            invoiceStatus: primaryInvoice.status,
+            invoiceAmount: primaryInvoice.amount,
+            invoicePaidAmount: primaryInvoice.paidAmount,
+            invoiceUnpaidAmount: primaryInvoice.unpaidAmount,
+            paymentStatus:
+              primaryInvoice.unpaidAmount <= 0
+                ? 'PAID'
+                : primaryInvoice.paidAmount > 0
+                  ? 'PARTIALLY_PAID'
+                  : 'UNPAID',
+            paymentRequired: primaryInvoice.unpaidAmount > 0,
+          } as any,
+        },
+      });
+    }
+
+    if (collectedAmount !== null && collectedAmount > 0) {
+      manualPaymentResult = await this.recordManualPayment(user.sub, updated.id, {
+        amount: collectedAmount,
+        paymentMethod: paymentMethod ?? 'CARD',
+        collectedAt: now.toISOString(),
+        note: note ?? undefined,
+      });
+    }
+
+    const refreshed = await this.prisma.parkingSession.findUniqueOrThrow({
+      where: { id: updated.id },
+      include: {
+        invoice: {
+          include: {
+            manualPayments: true,
+          },
+        },
+        ParkingSpace: {
+          include: {
+            section: {
+              include: {
+                parkingLot: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const finalInvoice =
+      manualPaymentResult?.invoice ??
+      refreshed.invoice ??
+      null;
+
+    const refreshedMetadata =
+      ((refreshed.metadata ?? {}) as any);
+
+    await enqueueEdgeParkingSessionSync(
+      this.prisma,
+      {
+        eventType:
+          'PARKING_SESSION_EXITED_FROM_EDGE',
+        session:
+          refreshed,
+        invoice:
+          finalInvoice,
+        calculation:
+          refreshedMetadata.feeCalculation ??
+          null,
+        source:
+          'MANUAL_OPERATION',
+      },
+    );
+
+    if (
+      finalInvoice &&
+      Number(finalInvoice.unpaidAmount ?? 0) > 0
+    ) {
+      await enqueueEdgeUnpaidExitSync(
+        this.prisma,
+        {
+          session:
+            refreshed,
+          invoice:
+            finalInvoice,
+          calculation:
+            refreshedMetadata.feeCalculation ??
+            null,
+          additionalFeeAmount:
+            Number(
+              refreshedMetadata.additionalFeeAmount ??
+              finalInvoice.unpaidAmount ??
+              0,
+            ),
+          additionalFeeReason:
+            refreshedMetadata.additionalFeeReason ??
+            'UNPAID_BEFORE_EXIT',
+          source:
+            'MANUAL_OPERATION',
+        },
+      );
+    }
+
+    return {
+      ok: true,
+      item:
+        refreshed,
+      invoice:
+        finalInvoice,
+      manualPayment:
+        manualPaymentResult?.manualPayment ??
+        null,
+    };
+  }
+
   async registerSession(userId: string, sessionId: string, input: RegisterSessionInput) {
     const session = await this.prisma.parkingSession.findUnique({
       where: { id: sessionId },
@@ -694,12 +1382,15 @@ export class ParkingSessionsService {
     const previousMetadata = (session.metadata ?? {}) as any;
 
     const hasRegistration = Boolean(plateNumber || contactNumber);
+    const memberVehicle = await this.resolveMemberVehicleForSession(plateNumber);
 
     const updated = await this.prisma.parkingSession.update({
       where: { id: sessionId },
       data: {
         plateNumber,
         contactPhone: contactNumber,
+        userId: memberVehicle.userId,
+        vehicleId: memberVehicle.vehicleId,
         isRegistered: hasRegistration,
         registeredAt: hasRegistration ? new Date() : null,
         registrationStatus: hasRegistration
@@ -719,6 +1410,8 @@ export class ParkingSessionsService {
           contactPhone: contactNumber,
           registeredBy: 'operator',
           registeredByUserId: hasRegistration ? userId : null,
+          linkedMemberUserId: memberVehicle.userId,
+          linkedVehicleId: memberVehicle.vehicleId,
         } as any,
       },
     });
@@ -732,6 +1425,8 @@ export class ParkingSessionsService {
           plateNumber,
           contactNumber,
           registeredByUserId: userId,
+          linkedMemberUserId: memberVehicle.userId,
+          linkedVehicleId: memberVehicle.vehicleId,
         } as any,
       },
     });

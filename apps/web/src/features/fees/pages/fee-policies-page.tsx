@@ -1,8 +1,7 @@
 'use client';
 
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import ParkingLotRegionFilter from '@/features/facilities/components/parking-lot-region-filter';
-
-import { useEffect, useMemo, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
 import { useAuth } from '@/components/providers/auth-provider';
 import type { ConsoleRole } from '@/lib/console-role';
@@ -38,11 +37,49 @@ type FeePolicy = {
   registrationGraceDiscountEnabled?: boolean;
   authorityRegistrationGraceDiscountEnabled?: boolean;
   watcherRewardGraceFeeEnabled?: boolean;
+  taxType?: 'VAT_INCLUDED' | 'TAX_EXEMPT';
   memberDiscountPercent?: number;
   isActive: boolean;
 };
 
 const VEHICLE_TYPES = ['CAR', 'TRUCK', 'BUS', 'MOTORCYCLE'];
+
+const VEHICLE_TYPE_LABELS: Record<string, string> = {
+  GENERAL: '일반',
+  CAR: '승용차',
+  COMPACT: '경차',
+  SMALL: '소형',
+  SEDAN: '승용차',
+  PASSENGER: '승용차',
+  SUV: 'SUV',
+  VAN: '승합차',
+  TRUCK: '화물차',
+  BUS: '버스',
+  MOTORCYCLE: '이륜차',
+  ELECTRIC: '전기차',
+  EV: '전기차',
+  DISABLED: '장애인 차량',
+  NATIONAL_MERIT: '국가유공자',
+  ALL: '전체',
+  DEFAULT: '기본',
+};
+
+function getVehicleTypeLabel(value?: string | null) {
+  if (!value) return '-';
+  return VEHICLE_TYPE_LABELS[value] ?? value;
+}
+
+function formatBooleanLabel(value?: boolean | null) {
+  if (value === true) return '사용';
+  if (value === false) return '미사용';
+  return '-';
+}
+
+function getTaxTypeLabel(value?: FeePolicy['taxType'] | null) {
+  if (value === 'TAX_EXEMPT') return '면세';
+  if (value === 'VAT_INCLUDED') return '부가세 포함';
+  return '-';
+}
 
 const initialForm = {
   parkingLotId: '',
@@ -61,6 +98,7 @@ const initialForm = {
   registrationGraceDiscountEnabled: true,
   authorityRegistrationGraceDiscountEnabled: false,
   watcherRewardGraceFeeEnabled: true,
+  taxType: 'VAT_INCLUDED' as FeePolicy['taxType'],
   memberDiscountPercent: 0,
   isActive: true,
 };
@@ -98,10 +136,6 @@ function getPolicyName(item: FeePolicy) {
   return item.name || item.code || item.id;
 }
 
-function hasPermission(permissions: string[] | undefined, permission: string) {
-  return Array.isArray(permissions) && permissions.includes(permission);
-}
-
 export default function FeePoliciesPage({ role = 'admin' }: Props) {
   const { session, user, isReady } = useAuth();
 
@@ -113,6 +147,7 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [selectedPolicy, setSelectedPolicy] = useState<FeePolicy | null>(null);
   const [error, setError] = useState('');
 
   const accessToken = session?.accessToken;
@@ -172,7 +207,11 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
 
       setItems(unwrapList<FeePolicy>(data));
     } catch (err) {
-      setError(err instanceof Error ? err.message : '요금 정책을 불러오지 못했습니다.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : '요금 정책을 불러오지 못했습니다.',
+      );
     } finally {
       setLoading(false);
     }
@@ -186,7 +225,7 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isReady, accessToken]);
 
-  async function createPolicy(e: React.FormEvent<HTMLFormElement>) {
+  async function createPolicy(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
     if (!canManage) return;
@@ -219,9 +258,16 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
           exitGraceMinutes: Number(form.exitGraceMinutes),
           registrationGraceMinutes: Number(form.registrationGraceMinutes),
           registrationGraceFee: Number(form.registrationGraceFee),
-          registrationGraceDiscountEnabled: Boolean(form.registrationGraceDiscountEnabled),
-          authorityRegistrationGraceDiscountEnabled: Boolean(form.authorityRegistrationGraceDiscountEnabled),
-          watcherRewardGraceFeeEnabled: Boolean(form.watcherRewardGraceFeeEnabled),
+          registrationGraceDiscountEnabled: Boolean(
+            form.registrationGraceDiscountEnabled,
+          ),
+          authorityRegistrationGraceDiscountEnabled: Boolean(
+            form.authorityRegistrationGraceDiscountEnabled,
+          ),
+          watcherRewardGraceFeeEnabled: Boolean(
+            form.watcherRewardGraceFeeEnabled,
+          ),
+          taxType: form.taxType ?? 'VAT_INCLUDED',
           memberDiscountPercent: Number(form.memberDiscountPercent),
           isActive: Boolean(form.isActive),
         }),
@@ -232,7 +278,11 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
       setModalOpen(false);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '요금 정책을 등록하지 못했습니다.');
+      setError(
+        err instanceof Error
+          ? err.message
+          : '요금 정책을 등록하지 못했습니다.',
+      );
     } finally {
       setSaving(false);
     }
@@ -292,25 +342,23 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
         </div>
       ) : null}
 
-      <section className="overflow-hidden rounded-3xl border bg-white">
-        <table className="w-full text-left text-sm">
+      <section className="overflow-x-auto rounded-3xl border bg-white">
+        <table className="min-w-[1180px] w-full text-left text-sm">
           <thead className="bg-slate-50 text-slate-500">
             <tr>
-              <th className="px-4 py-3 font-medium">번호</th>
-              <th className="px-4 py-3 font-medium">주차장</th>
-              <th className="px-4 py-3 font-medium">정책명</th>
-              <th className="px-4 py-3 font-medium">차량 유형</th>
-              <th className="px-4 py-3 font-medium">기본 요금</th>
-              <th className="px-4 py-3 font-medium">단위 요금</th>
-              <th className="px-4 py-3 font-medium">일일 최대 요금</th>
-              <th className="px-4 py-3 font-medium">무료 회차</th>
-              <th className="px-4 py-3 font-medium">결제 후 유예</th>
-              <th className="px-4 py-3 font-medium">직접 등록 할인</th>
-              <th className="px-4 py-3 font-medium">직권/Watcher</th>
-              <th className="px-4 py-3 font-medium">할인</th>
-              <th className="px-4 py-3 font-medium">상태</th>
+              <th className="whitespace-nowrap px-4 py-3 font-medium">번호</th>
+              <th className="whitespace-nowrap px-4 py-3 font-medium">주차장</th>
+              <th className="whitespace-nowrap px-4 py-3 font-medium">정책명</th>
+              <th className="whitespace-nowrap px-4 py-3 font-medium">차량 유형</th>
+              <th className="whitespace-nowrap px-4 py-3 font-medium">기본 요금</th>
+              <th className="whitespace-nowrap px-4 py-3 font-medium">단위 요금</th>
+              <th className="whitespace-nowrap px-4 py-3 font-medium">일 최대요금</th>
+              <th className="whitespace-nowrap px-4 py-3 font-medium">무료 회차</th>
+              <th className="whitespace-nowrap px-4 py-3 font-medium">결제 후 유예</th>
+              <th className="whitespace-nowrap px-4 py-3 font-medium">할인</th>
+              <th className="whitespace-nowrap px-4 py-3 font-medium">상태</th>
               {canManage ? (
-                <th className="px-4 py-3 font-medium">관리</th>
+                <th className="whitespace-nowrap px-4 py-3 font-medium">관리</th>
               ) : null}
             </tr>
           </thead>
@@ -318,7 +366,10 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
           <tbody>
             {loading ? (
               <tr>
-                <td className="px-4 py-6 text-slate-500" colSpan={canManage ? 14 : 13}>
+                <td
+                  className="px-4 py-6 text-slate-500"
+                  colSpan={canManage ? 12 : 11}
+                >
                   불러오는 중...
                 </td>
               </tr>
@@ -326,7 +377,7 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
               <tr>
                 <td
                   className="px-4 py-6 text-center text-slate-500"
-                  colSpan={canManage ? 14 : 13}
+                  colSpan={canManage ? 12 : 11}
                 >
                   등록된 요금 정책이 없습니다.
                 </td>
@@ -334,49 +385,41 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
             ) : (
               items.map((item, index) => (
                 <tr key={item.id} className="border-t">
-                  <td className="px-4 py-3">{index + 1}</td>
-                  <td className="px-4 py-3">{getParkingLotName(item, parkingLots)}</td>
-                  <td className="px-4 py-3">{getPolicyName(item)}</td>
-                  <td className="px-4 py-3">{item.vehicleType}</td>
-                  <td className="px-4 py-3">
+                  <td className="whitespace-nowrap px-4 py-3">{index + 1}</td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {getParkingLotName(item, parkingLots)}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPolicy(item)}
+                      className="font-medium text-slate-900 underline-offset-2 hover:underline"
+                    >
+                      {getPolicyName(item)}
+                    </button>
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {getVehicleTypeLabel(item.vehicleType)}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">
                     {item.baseMinutes}분 / {formatCurrency(item.baseFee)}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="whitespace-nowrap px-4 py-3">
                     {item.unitMinutes}분 / {formatCurrency(item.unitFee)}
                   </td>
-                  <td className="px-4 py-3">{formatCurrency(item.dailyMax)}</td>
-                  <td className="px-4 py-3">{item.graceMinutes ?? 0}분</td>
-                  <td className="px-4 py-3">{item.exitGraceMinutes ?? 10}분</td>
-                  <td className="px-4 py-3">
-                    <div className="text-xs leading-5">
-                      <div>
-                        {(item.registrationGraceDiscountEnabled ?? true)
-                          ? '사용'
-                          : '미사용'}
-                      </div>
-                      <div>
-                        {item.registrationGraceMinutes ?? 10}분 / {formatCurrency(item.registrationGraceFee ?? 0)}
-                      </div>
-                    </div>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {formatCurrency(item.dailyMax)}
                   </td>
-                  <td className="px-4 py-3">
-                    <div className="text-xs leading-5">
-                      <div>
-                        직권 할인:{' '}
-                        {item.authorityRegistrationGraceDiscountEnabled
-                          ? '사용'
-                          : '미사용'}
-                      </div>
-                      <div>
-                        Watcher 보상:{' '}
-                        {item.watcherRewardGraceFeeEnabled ? '사용' : '미사용'}
-                      </div>
-                    </div>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {item.graceMinutes ?? 0}분
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {item.exitGraceMinutes ?? 10}분
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">
                     {item.memberDiscountPercent ?? 0}%
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="whitespace-nowrap px-4 py-3">
                     <span
                       className={`rounded-full px-2 py-1 text-xs font-medium ${
                         item.isActive
@@ -388,7 +431,7 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
                     </span>
                   </td>
                   {canManage ? (
-                    <td className="px-4 py-3">
+                    <td className="whitespace-nowrap px-4 py-3">
                       <button
                         type="button"
                         className="rounded-xl border px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
@@ -403,6 +446,14 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
           </tbody>
         </table>
       </section>
+
+      {selectedPolicy ? (
+        <FeePolicyDetailModal
+          policy={selectedPolicy}
+          parkingLotName={getParkingLotName(selectedPolicy, parkingLots)}
+          onClose={() => setSelectedPolicy(null)}
+        />
+      ) : null}
 
       {modalOpen && canManage ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
@@ -468,7 +519,7 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
                   className="w-full rounded-2xl border px-4 py-3 text-sm outline-none"
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="Default Car Fee"
+                  placeholder="기본 승용차 요금"
                   required
                 />
               </div>
@@ -486,14 +537,14 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
                 >
                   {VEHICLE_TYPES.map((item) => (
                     <option key={item} value={item}>
-                      {item}
+                      {getVehicleTypeLabel(item)}
                     </option>
                   ))}
                 </select>
               </div>
 
               <NumberField
-                label="Base Minutes"
+                label="기본 시간(분)"
                 value={form.baseMinutes}
                 onChange={(value) => setForm({ ...form, baseMinutes: value })}
               />
@@ -505,7 +556,7 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
               />
 
               <NumberField
-                label="Unit Minutes"
+                label="단위 시간(분)"
                 value={form.unitMinutes}
                 onChange={(value) => setForm({ ...form, unitMinutes: value })}
               />
@@ -517,10 +568,32 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
               />
 
               <NumberField
-                label="일일 최대 요금"
+                label="일 최대요금"
                 value={form.dailyMax}
                 onChange={(value) => setForm({ ...form, dailyMax: value })}
               />
+
+              <label className="block">
+                <span className="text-xs font-bold text-slate-500">
+                  과세 구분
+                </span>
+                <select
+                  value={form.taxType ?? 'VAT_INCLUDED'}
+                  onChange={(event) =>
+                    setForm({
+                      ...form,
+                      taxType: event.target.value as FeePolicy['taxType'],
+                    })
+                  }
+                  className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:border-blue-500"
+                >
+                  <option value="VAT_INCLUDED">부가세 포함 요금</option>
+                  <option value="TAX_EXEMPT">면세 요금</option>
+                </select>
+                <p className="mt-2 text-xs font-bold text-slate-400">
+                  기본값은 부가세 포함입니다. 공영/면세 주차장은 면세 요금으로 선택하세요.
+                </p>
+              </label>
 
               <NumberField
                 label="무료 회차 시간(분)"
@@ -537,7 +610,7 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
               />
 
               <NumberField
-                label="Member Discount %"
+                label="회원 할인율(%)"
                 value={form.memberDiscountPercent}
                 onChange={(value) =>
                   setForm({ ...form, memberDiscountPercent: value })
@@ -552,87 +625,87 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
                     setForm({ ...form, isActive: e.target.checked })
                   }
                 />
-                Active
+                사용 여부
               </label>
 
-                  <label className="space-y-1">
-                    <span className="text-sm font-medium text-slate-700">
-                      직접 등록 할인 시간
-                    </span>
-                    <input
-                      type="number"
-                      min={0}
-                      value={form.registrationGraceMinutes}
-                      onChange={(event) =>
-                        setForm((prev) => ({
-                          ...prev,
-                          registrationGraceMinutes: Number(event.target.value),
-                        }))
-                      }
-                      className="w-full rounded-xl border px-3 py-2 text-sm"
-                    />
-                  </label>
+              <label className="space-y-1">
+                <span className="text-sm font-medium text-slate-700">
+                  직접 등록 할인 시간
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  value={form.registrationGraceMinutes}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      registrationGraceMinutes: Number(event.target.value),
+                    }))
+                  }
+                  className="w-full rounded-xl border px-3 py-2 text-sm"
+                />
+              </label>
 
-                  <label className="space-y-1">
-                    <span className="text-sm font-medium text-slate-700">
-                      직접 등록 할인 금액
-                    </span>
-                    <input
-                      type="number"
-                      min={0}
-                      value={form.registrationGraceFee}
-                      onChange={(event) =>
-                        setForm((prev) => ({
-                          ...prev,
-                          registrationGraceFee: Number(event.target.value),
-                        }))
-                      }
-                      className="w-full rounded-xl border px-3 py-2 text-sm"
-                    />
-                  </label>
+              <label className="space-y-1">
+                <span className="text-sm font-medium text-slate-700">
+                  직접 등록 할인 금액
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  value={form.registrationGraceFee}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      registrationGraceFee: Number(event.target.value),
+                    }))
+                  }
+                  className="w-full rounded-xl border px-3 py-2 text-sm"
+                />
+              </label>
 
-                  <label className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={form.registrationGraceDiscountEnabled}
-                      onChange={(event) =>
-                        setForm((prev) => ({
-                          ...prev,
-                          registrationGraceDiscountEnabled: event.target.checked,
-                        }))
-                      }
-                    />
-                    직접 등록 할인 사용
-                  </label>
+              <label className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={form.registrationGraceDiscountEnabled}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      registrationGraceDiscountEnabled: event.target.checked,
+                    }))
+                  }
+                />
+                직접 등록 할인 사용
+              </label>
 
-                  <label className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={form.authorityRegistrationGraceDiscountEnabled}
-                      onChange={(event) =>
-                        setForm((prev) => ({
-                          ...prev,
-                          authorityRegistrationGraceDiscountEnabled:
-                            event.target.checked,
-                        }))
-                      }
-                    />
-                    직권 등록 할인 사용
-                  </label>
+              <label className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={form.authorityRegistrationGraceDiscountEnabled}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      authorityRegistrationGraceDiscountEnabled:
+                        event.target.checked,
+                    }))
+                  }
+                />
+                직권 등록 할인 사용
+              </label>
 
-                  <label className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={form.watcherRewardGraceFeeEnabled}
-                      onChange={(event) =>
-                        setForm((prev) => ({
-                          ...prev,
-                          watcherRewardGraceFeeEnabled: event.target.checked,
-                        }))
-                      }
-                    />
-                    Watcher 보상 기준 사용
-                  </label>
+              <label className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={form.watcherRewardGraceFeeEnabled}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      watcherRewardGraceFeeEnabled: event.target.checked,
+                    }))
+                  }
+                />
+                Watcher 보상 기준 사용
+              </label>
 
               <div className="flex justify-end gap-2 pt-2 md:col-span-2">
                 <button
@@ -640,7 +713,7 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
                   onClick={() => setModalOpen(false)}
                   className="rounded-2xl border px-4 py-2 text-sm font-medium"
                 >
-                  Cancel
+                  취소
                 </button>
 
                 <button
@@ -648,7 +721,7 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
                   disabled={!canSubmit || saving}
                   className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
                 >
-                  {saving ? 'Saving...' : 'Save'}
+                  {saving ? '저장 중...' : '저장'}
                 </button>
               </div>
             </form>
@@ -656,6 +729,134 @@ export default function FeePoliciesPage({ role = 'admin' }: Props) {
         </div>
       ) : null}
     </main>
+  );
+}
+
+function FeePolicyDetailModal({
+  policy,
+  parkingLotName,
+  onClose,
+}: {
+  policy: FeePolicy;
+  parkingLotName: string;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">
+              요금 정책 상세정보
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              {getPolicyName(policy)}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
+          >
+            닫기
+          </button>
+        </div>
+
+        <dl className="mt-5 grid grid-cols-[132px_1fr] gap-x-4 gap-y-3 rounded-2xl border bg-slate-50 p-4 text-sm">
+          <DetailRow label="주차장" value={parkingLotName} />
+          <DetailRow label="정책명" value={getPolicyName(policy)} />
+          <DetailRow label="정책 코드" value={policy.code ?? '-'} />
+          <DetailRow
+            label="차량 유형"
+            value={getVehicleTypeLabel(policy.vehicleType)}
+          />
+          <DetailRow
+            label="기본 요금"
+            value={`${policy.baseMinutes}분 / ${formatCurrency(policy.baseFee)}`}
+          />
+          <DetailRow
+            label="단위 요금"
+            value={`${policy.unitMinutes}분 / ${formatCurrency(policy.unitFee)}`}
+          />
+          <DetailRow label="일 최대요금" value={formatCurrency(policy.dailyMax)} />
+          <DetailRow label="과세 구분" value={getTaxTypeLabel(policy.taxType)} />
+          <DetailRow label="무료 회차" value={`${policy.graceMinutes ?? 0}분`} />
+          <DetailRow
+            label="결제 후 유예"
+            value={`${policy.exitGraceMinutes ?? 10}분`}
+          />
+          <DetailRow
+            label="직접 등록 할인"
+            value={
+              <div className="space-y-1">
+                <div>
+                  사용 여부:{' '}
+                  {formatBooleanLabel(
+                    policy.registrationGraceDiscountEnabled ?? true,
+                  )}
+                </div>
+                <div>
+                  기준:{' '}
+                  {policy.registrationGraceMinutes ?? 10}분 /{' '}
+                  {formatCurrency(policy.registrationGraceFee ?? 0)}
+                </div>
+              </div>
+            }
+          />
+          <DetailRow
+            label="직권/Watcher"
+            value={
+              <div className="space-y-1">
+                <div>
+                  직권 할인:{' '}
+                  {formatBooleanLabel(
+                    policy.authorityRegistrationGraceDiscountEnabled,
+                  )}
+                </div>
+                <div>
+                  Watcher 보상:{' '}
+                  {formatBooleanLabel(policy.watcherRewardGraceFeeEnabled)}
+                </div>
+              </div>
+            }
+          />
+          <DetailRow
+            label="회원 할인"
+            value={`${policy.memberDiscountPercent ?? 0}%`}
+          />
+          <DetailRow
+            label="상태"
+            value={policy.isActive ? '사용' : '미사용'}
+          />
+        </dl>
+
+        <div className="mt-6 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+          >
+            확인
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DetailRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: ReactNode;
+}) {
+  return (
+    <>
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="font-medium text-slate-900">{value}</dd>
+    </>
   );
 }
 

@@ -5,9 +5,19 @@ import { PrismaService } from '../../prisma/prisma.service';
 export class PublicParkingService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getRegions() {
+  async getRegions(operationMode?: string) {
+    const normalizedOperationMode =
+      operationMode === 'SENSOR'
+        ? ('SENSOR' as const)
+        : operationMode === 'MANUAL'
+          ? ('MANUAL' as const)
+          : undefined;
+
     const lots = await this.prisma.parkingLot.findMany({
-      where: { isActive: true },
+      where: {
+        ...(normalizedOperationMode
+          ? { operationMode: normalizedOperationMode }
+          : {}), isActive: true },
       select: {
         region: true,
         district: true,
@@ -44,9 +54,20 @@ export class PublicParkingService {
     });
   }
 
-  async getParkingLots(region?: string, district?: string) {
+  async getParkingLots(region?: string, district?: string,
+    operationMode?: string) {
+    const normalizedOperationMode =
+      operationMode === 'SENSOR'
+        ? ('SENSOR' as const)
+        : operationMode === 'MANUAL'
+          ? ('MANUAL' as const)
+          : undefined;
+
     const lots = await this.prisma.parkingLot.findMany({
       where: {
+        ...(normalizedOperationMode
+          ? { operationMode: normalizedOperationMode }
+          : {}),
         isActive: true,
         ...(region
           ? {

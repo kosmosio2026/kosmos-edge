@@ -1,8 +1,16 @@
 'use client';
 
+import {
+  formatKoreanPhoneNumber,
+  normalizeEmail,
+  validateEmail,
+  validateKoreanPhoneNumber,
+  validatePassword,
+} from '@parking/shared/validation';
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api-client';
+import { FORM_HINTS, FORM_PLACEHOLDERS } from '@/lib/forms/placeholders';
 
 type Role = 'ADMIN' | 'MANAGER' | 'OPERATOR' | 'MEMBER' | 'VISITOR';
 
@@ -91,10 +99,48 @@ export default function RoleRegisterPage({ role }: Props) {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
 
+    const emailValidation = validateEmail(form.email);
+    if (!emailValidation.ok) {
+      setError(emailValidation.message ?? '올바른 이메일 형식이 아닙니다.');
+      return;
+    }
+
+    const phoneValidation = validateKoreanPhoneNumber(form.phone, { mobileOnly: true });
+    if (!phoneValidation.ok) {
+      setError(phoneValidation.message ?? '올바른 휴대전화 번호가 아닙니다.');
+      return;
+    }
+
+    if (role === 'MEMBER' && form.emergencyContact.trim()) {
+      const emergencyContactValidation = validateKoreanPhoneNumber(form.emergencyContact, {
+        required: false,
+      });
+
+      if (!emergencyContactValidation.ok) {
+        setError(emergencyContactValidation.message ?? '올바른 비상 연락처 형식이 아닙니다.');
+        return;
+      }
+    }
+
+    const passwordValidation = validatePassword(form.password);
+    if (!passwordValidation.ok) {
+      setError(passwordValidation.messages[0] ?? FORM_HINTS.passwordPolicy);
+      return;
+    }
+
     if (form.password !== form.confirmPassword) {
       setError('비밀번호가 일치하지 않습니다.');
       return;
     }
+
+    const sanitizedForm = {
+      ...form,
+      email: emailValidation.normalized,
+      phone: phoneValidation.formatted,
+      emergencyContact: form.emergencyContact.trim()
+        ? formatKoreanPhoneNumber(form.emergencyContact)
+        : '',
+    };
 
     setLoading(true);
     setError(null);
@@ -102,7 +148,7 @@ export default function RoleRegisterPage({ role }: Props) {
     try {
       await apiFetch('/auth/register', {
         method: 'POST',
-        body: JSON.stringify(buildPayload(role, form)),
+        body: JSON.stringify(buildPayload(role, sanitizedForm)),
       });
 
       alert(`${config.title}이 완료되었습니다.`);
@@ -118,7 +164,7 @@ export default function RoleRegisterPage({ role }: Props) {
     <main className="min-h-screen bg-slate-100 px-4 py-12">
       <div className="mx-auto grid max-w-5xl overflow-hidden rounded-3xl bg-white shadow-xl md:grid-cols-2">
         <section className="hidden bg-slate-950 p-10 text-white md:block">
-          <p className="text-sm text-slate-400">Smart Parking Platform</p>
+          <p className="text-sm text-slate-400">KOSMOS 스마트 주차관제 플랫폼</p>
           <h1 className="mt-6 text-4xl font-bold leading-tight">
             {config.title}
           </h1>
@@ -144,10 +190,10 @@ export default function RoleRegisterPage({ role }: Props) {
 
           <form onSubmit={submit} className="mt-8 space-y-4">
             <Input label="이름" value={form.name} onChange={(v) => setForm({ ...form, name: v })} />
-            <Input label="이메일" type="email" value={form.email} onChange={(v) => setForm({ ...form, email: v })} />
-            <Input label="전화번호" value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} />
-            <Input label="비밀번호" type="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} />
-            <Input label="비밀번호 확인" type="password" value={form.confirmPassword} onChange={(v) => setForm({ ...form, confirmPassword: v })} />
+            <Input label="이메일" type="email" value={form.email} onChange={(v) => setForm({ ...form, email: normalizeEmail(v) })} placeholder={FORM_PLACEHOLDERS.email} />
+            <Input label="전화번호" value={form.phone} onChange={(v) => setForm({ ...form, phone: formatKoreanPhoneNumber(v) })} placeholder={FORM_PLACEHOLDERS.mobilePhone} inputMode="tel" hint={FORM_HINTS.phoneDigitsOnly} />
+            <Input label="비밀번호" type="password" value={form.password} onChange={(v) => setForm({ ...form, password: v })} placeholder={FORM_PLACEHOLDERS.password} hint={FORM_HINTS.passwordPolicy} />
+            <Input label="비밀번호 확인" type="password" value={form.confirmPassword} onChange={(v) => setForm({ ...form, confirmPassword: v })} placeholder={FORM_PLACEHOLDERS.passwordConfirm} />
 
             {role === 'ADMIN' ? (
               <Input label="관리자 설정 코드" type="password" value={form.setupCode} onChange={(v) => setForm({ ...form, setupCode: v })} />
@@ -156,7 +202,7 @@ export default function RoleRegisterPage({ role }: Props) {
             {role === 'MEMBER' ? (
               <>
                 <Input label="차량번호" value={form.vehicleNo} onChange={(v) => setForm({ ...form, vehicleNo: v })} />
-                <Input label="비상 연락처" value={form.emergencyContact} onChange={(v) => setForm({ ...form, emergencyContact: v })} />
+                <Input label="비상 연락처" value={form.emergencyContact} onChange={(v) => setForm({ ...form, emergencyContact: formatKoreanPhoneNumber(v) })} placeholder={FORM_PLACEHOLDERS.mobilePhone} inputMode="tel" />
                 <Checkbox label="자동결제 사용" checked={form.billingAutoPay} onChange={(v) => setForm({ ...form, billingAutoPay: v })} />
               </>
             ) : null}
@@ -331,22 +377,32 @@ function Input({
   value,
   onChange,
   type = 'text',
+  placeholder,
+  inputMode,
+  hint,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   type?: string;
+  placeholder?: string;
+  inputMode?: 'none' | 'text' | 'tel' | 'url' | 'email' | 'numeric' | 'decimal' | 'search';
+  hint?: string;
 }) {
   return (
     <label className="block">
       <span className="text-sm font-medium text-slate-700">{label}</span>
       <input
-        required
-        type={type}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50"
+        type={type}
+        placeholder={placeholder}
+        inputMode={inputMode}
+        className="mt-1 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
       />
+      {hint ? (
+        <p className="mt-2 text-xs font-semibold text-slate-400">{hint}</p>
+      ) : null}
     </label>
   );
 }
@@ -355,10 +411,14 @@ function Textarea({
   label,
   value,
   onChange,
+  placeholder,
+  hint,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  placeholder?: string;
+  hint?: string;
 }) {
   return (
     <label className="block">
@@ -366,8 +426,13 @@ function Textarea({
       <textarea
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-1 min-h-24 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50"
+        placeholder={placeholder}
+        rows={4}
+        className="mt-1 w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-blue-500"
       />
+      {hint ? (
+        <p className="mt-2 text-xs font-semibold text-slate-400">{hint}</p>
+      ) : null}
     </label>
   );
 }

@@ -1,5 +1,6 @@
 import {
   IsBoolean,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -63,6 +64,10 @@ export class CreateFeePolicyDto {
   @IsOptional()
   @IsBoolean()
   watcherRewardGraceFeeEnabled?: boolean;
+
+  @IsOptional()
+  @IsIn(['VAT_INCLUDED', 'TAX_EXEMPT'])
+  taxType?: 'VAT_INCLUDED' | 'TAX_EXEMPT';
 
   @IsOptional()
   @IsInt()

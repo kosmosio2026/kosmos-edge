@@ -15,9 +15,11 @@ export class MobileMapService {
       ? {
           id: query.parkingLotId,
           isActive: true,
+          operationMode: 'SENSOR' as const,
         }
       : {
           isActive: true,
+          operationMode: 'SENSOR' as const,
         };
 
     // 1. LOT 조회
@@ -33,6 +35,7 @@ export class MobileMapService {
         centerLat: true,
         centerLng: true,
         isActive: true,
+        operationMode: true,
       },
       orderBy: { name: 'asc' },
     });

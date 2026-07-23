@@ -80,6 +80,35 @@ enum DiscountType {
   FIXED
 }
 
+/// 할인 자격이 회원 개인에게 속하는지 차량에 속하는지 구분한다.
+enum DiscountEligibilityScope {
+  MEMBER
+  VEHICLE
+}
+
+/// 주차장 할인 프로그램의 혜택 계산 방식이다.
+enum DiscountBenefitType {
+  PERCENT
+  FIXED_AMOUNT
+  FREE_MINUTES
+  FULL_WAIVER
+}
+
+/// 현재 버전은 고객 또는 운영자가 입력한 자기신고 정보만 사용한다.
+enum EligibilityDeclarationSource {
+  MEMBER_SIGNUP
+  MEMBER_PROFILE
+  MANAGER_ENTRY
+  OPERATOR_ENTRY
+}
+
+/// 실제 세션에 적용된 할인 출처다.
+enum DiscountApplicationSource {
+  AUTOMATIC_ELIGIBILITY
+  TENANT_COUPON
+  MANUAL_ADJUSTMENT
+}
+
 enum SpaceStatus {
   EMPTY
   OCCUPIED
@@ -338,7 +367,10 @@ model User {
   visitorProfile  VisitorProfile?
   tenantId        String?
   tenant          Tenant?          @relation(fields: [tenantId], references: [id])
-  vehicles        UserVehicle[]
+
+  managementCompanyId String?
+  managementCompany   ManagementCompany? @relation(fields: [managementCompanyId], references: [id], onDelete: SetNull)
+  vehicles            UserVehicle[]
 
   parkingSessions ParkingSession[]
 
@@ -362,11 +394,15 @@ model User {
   pushTokens           PushToken[]
   createdNotifications PushNotification[]
 
-  authSessions                             Session[]
-  auditLogs                                AuditLog[]
-  userDevices                              UserDevice[]
-  MonthlySubscription                      MonthlySubscription[]
-  tenantUsers                              TenantUser[]
+  authSessions        Session[]
+  auditLogs           AuditLog[]
+  userDevices         UserDevice[]
+  MonthlySubscription MonthlySubscription[]
+  tenantUsers         TenantUser[]
+
+  tenantVisitConfirmations                 TenantVisitConfirmation[]                @relation("TenantVisitConfirmedBy")
+  tenantStatementsClosed                   TenantMonthlyStatement[]                 @relation("TenantStatementClosedBy")
+  tenantSessionsConfirmed                  ParkingSession[]                         @relation("ParkingSessionTenantConfirmedBy")
   favoriteParkingLots                      FavoriteParkingLot[]
   watcherApplications                      WatcherApplication[]                     @relation("WatcherApplicationWatcher")
   watcherApplicationsApproved              WatcherApplication[]                     @relation("WatcherApplicationApprovedBy")
@@ -382,6 +418,18 @@ model User {
   correctedRegistrationProxyLogs           RegistrationProxyLog[]                   @relation("RegistrationProxyLogCorrectedBy")
   authorityRegistrationCorrectionHistories AuthorityRegistrationCorrectionHistory[]
   authorityRegistrationReviewHistories     AuthorityRegistrationReviewHistory[]
+  approvedTenantApplications               TenantApplication[]                      @relation("TenantApplicationApprovedBy")
+  rejectedTenantApplications               TenantApplication[]                      @relation("TenantApplicationRejectedBy")
+
+  requestedTenantCouponPurchases TenantCouponPurchase[] @relation("TenantCouponPurchaseRequestedBy")
+  confirmedTenantCouponPurchases TenantCouponPurchase[] @relation("TenantCouponPurchaseConfirmedBy")
+  assignedTenantCoupons          TenantCoupon[]         @relation("TenantCouponAssignedMember")
+  tenantCouponsAssignedBy        TenantCoupon[]         @relation("TenantCouponAssignedBy")
+  tenantCouponEventsActed        TenantCouponEvent[]    @relation("TenantCouponEventActor")
+  tenantCouponEventsForMember    TenantCouponEvent[]    @relation("TenantCouponEventMember")
+
+  @@index([tenantId])
+  @@index([managementCompanyId])
 }
 
 model Role {
@@ -597,8 +645,16 @@ model Vehicle {
 
   plateNumber String @unique
 
+  /// 기존 호환 필드. 신규 화면에서는 sizeClass와 powertrainType을 사용한다.
   vehicleType String?
-  ownerName   String?
+
+  /// 예: GENERAL, COMPACT, VAN, TRUCK, MOTORCYCLE, OTHER
+  sizeClass String?
+
+  /// 예: ICE, HYBRID, PHEV, EV, HYDROGEN, OTHER
+  powertrainType String?
+
+  ownerName String?
 
   memberProfileId String?
   memberProfile   MemberProfile? @relation(fields: [memberProfileId], references: [id])
@@ -610,12 +666,74 @@ model Vehicle {
 
   userLinks UserVehicle[]
 
+  eligibilityDeclarations VehicleEligibilityDeclaration[]
+
   sessions     ParkingSession[]
   EntryRecord  EntryRecord[]
   ExitRecord   ExitRecord[]
   Subscription Subscription[]
 
   @@index([plateNumber])
+}
+
+enum TenantVisitConfirmationStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+enum TenantChargeType {
+  VISIT_PARKING_FEE
+  ADJUSTMENT
+  CANCEL
+}
+
+enum TenantChargeStatus {
+  PENDING
+  STATEMENT_DRAFTED
+  STATEMENT_CLOSED
+  CANCELLED
+}
+
+enum TenantMonthlyStatementStatus {
+  DRAFT
+  CLOSED
+  INVOICED
+  PAID
+  CANCELLED
+}
+
+enum TenantApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum TenantCouponPurchaseStatus {
+  REQUESTED
+  PAYMENT_PENDING
+  PAYMENT_CONFIRMED
+  ISSUED
+  CANCELLED
+}
+
+enum TenantCouponStatus {
+  AVAILABLE
+  ASSIGNED
+  RESERVED
+  USED
+  EXPIRED
+  CANCELLED
+}
+
+enum TenantCouponEventType {
+  ISSUED
+  ASSIGNED
+  RESERVED
+  RESERVATION_RELEASED
+  USED
+  CANCELLED
+  EXPIRED
 }
 
 //////////////////////////////////////////////////////
@@ -633,6 +751,8 @@ model MemberProfile {
   membershipNo     String?
   emergencyContact String?
   billingAutoPay   Boolean   @default(false)
+
+  eligibilityDeclarations MemberEligibilityDeclaration[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -664,6 +784,9 @@ model ManagerProfile {
 
   user User @relation(fields: [userId], references: [id])
 
+  managementCompanyId String?
+  managementCompany   ManagementCompany? @relation(fields: [managementCompanyId], references: [id], onDelete: SetNull)
+
   companyName String
   department  String?
 
@@ -676,6 +799,8 @@ model ManagerProfile {
   approvedBy User? @relation("ManagerApprovedBy", fields: [approvedById], references: [id])
 
   createdAt DateTime @default(now())
+
+  @@index([managementCompanyId])
 }
 
 model OperatorProfile {
@@ -683,9 +808,9 @@ model OperatorProfile {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  employeeNo        String?
-  companyName       String?
-  shiftType         String?
+  employeeNo       String?
+  companyName      String?
+  shiftType        String?
   emergencyContact String?
 
   isApproved   Boolean   @default(false)
@@ -723,10 +848,11 @@ model ParkingLot {
   representative String?
   contact        String?
 
-  tenantId String
-  tenant   Tenant @relation(fields: [tenantId], references: [id])
+  managementCompanyId String?
+  managementCompany   ManagementCompany? @relation(fields: [managementCompanyId], references: [id], onDelete: SetNull)
 
-  isActive Boolean @default(true)
+  isActive      Boolean @default(true)
+  operationMode String  @default("SENSOR")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -756,10 +882,21 @@ model ParkingLot {
   watcherBindings     WatcherLotBinding[]
   enforcementCases    EnforcementCase[]
 
+  visitTenants             Tenant[]                  @relation("TenantParkingLot")
+  tenantVisitConfirmations TenantVisitConfirmation[]
+  tenantCharges            TenantCharge[]
+  tenantMonthlyStatements  TenantMonthlyStatement[]
+  tenantApplications       TenantApplication[]
+
+  discountEligibilityPrograms ParkingDiscountProgram[]
+  tenantCouponProducts        TenantCouponProduct[]
+
   @@index([name])
   @@index([region])
   @@index([isActive])
+  @@index([operationMode])
   @@index([createdAt])
+  @@index([managementCompanyId])
 }
 
 model ParkingSection {
@@ -843,6 +980,9 @@ model ParkingSpace {
   scopes          UserScopeBinding[]
   Device          Device[]
 
+  tenantVisitConfirmations TenantVisitConfirmation[]
+  tenantCharges            TenantCharge[]
+
   @@unique([sectionId, code])
   @@index([sectionId])
   @@index([status])
@@ -895,10 +1035,18 @@ model ParkingSession {
   entryGate String?
   exitGate  String?
 
+  entrySource String  @default("SENSOR")
+  exitSource  String?
+
   entryTime       DateTime?
   exitTime        DateTime?
   graceStartedAt  DateTime?
   billingClosedAt DateTime?
+
+  manualEntryAt       DateTime?
+  manualExitAt        DateTime?
+  manualEntryByUserId String?
+  manualExitByUserId  String?
 
   totalMinutes Int?
   amount       Int?
@@ -911,6 +1059,12 @@ model ParkingSession {
   registeredAt DateTime?
   metadata     Json?
 
+  visitTenantId          String?
+  tenantConfirmedAt      DateTime?
+  tenantGraceUntil       DateTime?
+  tenantCoveredAmount    Int       @default(0)
+  tenantVisitConfirmedBy String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -918,31 +1072,46 @@ model ParkingSession {
   vehicle   Vehicle?   @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
   feePolicy FeePolicy? @relation(fields: [feePolicyId], references: [id], onDelete: SetNull)
 
-  events                                   ParkingSessionEvent[]
-  primaryInvoiceId                        String?                                  @unique
-  invoice                                  Invoice?                                  @relation("ParkingSessionPrimaryInvoice", fields: [primaryInvoiceId], references: [id], onDelete: SetNull)
-  invoices                                 Invoice[]                                 @relation("ParkingSessionInvoices")
-  receipts                                 Receipt[]
-  ParkingSpace                             ParkingSpace?                            @relation(fields: [parkingSpaceId], references: [id])
-  registrationStatus                       RegistrationStatus                       @default(UNREGISTERED)
-  registrationMethod                       RegistrationMethod?
-  registeredByUserId                       String?
-  contactPhone                             String?
-  visitorProfileUserId                     String?
-  visitorProfile                           VisitorProfile?                          @relation(fields: [visitorProfileUserId], references: [userId], onDelete: SetNull)
+  events               ParkingSessionEvent[]
+  primaryInvoiceId     String?               @unique
+  invoice              Invoice?              @relation("ParkingSessionPrimaryInvoice", fields: [primaryInvoiceId], references: [id], onDelete: SetNull)
+  invoices             Invoice[]             @relation("ParkingSessionInvoices")
+  receipts             Receipt[]
+  ParkingSpace         ParkingSpace?         @relation(fields: [parkingSpaceId], references: [id])
+  registrationStatus   RegistrationStatus    @default(UNREGISTERED)
+  registrationMethod   RegistrationMethod?
+  registeredByUserId   String?
+  contactPhone         String?
+  visitorProfileUserId String?
+  visitorProfile       VisitorProfile?       @relation(fields: [visitorProfileUserId], references: [userId], onDelete: SetNull)
+
+  visitTenant                              Tenant?                                  @relation("ParkingSessionVisitTenant", fields: [visitTenantId], references: [id], onDelete: SetNull)
+  tenantConfirmedBy                        User?                                    @relation("ParkingSessionTenantConfirmedBy", fields: [tenantVisitConfirmedBy], references: [id], onDelete: SetNull)
+  tenantVisitConfirmations                 TenantVisitConfirmation[]
+  tenantCharges                            TenantCharge[]
   registrationPhotos                       ParkingRegistrationPhoto[]
   proxyLogs                                RegistrationProxyLog[]
   enforcementCases                         EnforcementCase[]
   plateRecognitionResults                  PlateRecognitionResult[]
   authorityRegistrationCorrectionHistories AuthorityRegistrationCorrectionHistory[]
 
+  appliedDiscounts      ParkingSessionDiscount[]
+  reservedTenantCoupons TenantCoupon[]           @relation("TenantCouponReservedSession")
+  usedTenantCoupons     TenantCoupon[]           @relation("TenantCouponUsedSession")
+  tenantCouponEvents    TenantCouponEvent[]
+
   @@index([userId])
   @@index([vehicleId])
   @@index([parkingSpaceId])
   @@index([status])
+  @@index([entrySource])
+  @@index([exitSource])
   @@index([entryTime])
   @@index([registeredAt])
   @@index([createdAt])
+  @@index([visitTenantId])
+  @@index([tenantConfirmedAt])
+  @@index([tenantGraceUntil])
 }
 
 model ParkingSessionEvent {
@@ -963,6 +1132,11 @@ model ParkingSessionEvent {
 // PAYMENT / INVOICE
 //////////////////////////////////////////////////////
 
+enum FeeTaxType {
+  VAT_INCLUDED
+  TAX_EXEMPT
+}
+
 model Invoice {
   id        String @id @default(cuid())
   invoiceNo String @unique
@@ -975,11 +1149,16 @@ model Invoice {
   paidAmount     Int @default(0)
   unpaidAmount   Int @default(0)
 
-  baseParkingAmount                 Int @default(0)
-  registrationGraceDiscountAmount   Int @default(0)
+  baseParkingAmount                    Int @default(0)
+  registrationGraceDiscountAmount      Int @default(0)
   authorityRegistrationSurchargeAmount Int @default(0)
-  watcherRewardBasisAmount          Int @default(0)
-  finalAmount                       Int @default(0)
+  watcherRewardBasisAmount             Int @default(0)
+  finalAmount                          Int @default(0)
+
+  taxType         FeeTaxType @default(VAT_INCLUDED)
+  supplyAmount    Int        @default(0)
+  vatAmount       Int        @default(0)
+  taxExemptAmount Int        @default(0)
 
   issuedAt DateTime?
   dueAt    DateTime?
@@ -990,11 +1169,14 @@ model Invoice {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  session        ParkingSession         @relation("ParkingSessionInvoices", fields: [sessionId], references: [id], onDelete: Cascade)
-  primaryForSession ParkingSession? @relation("ParkingSessionPrimaryInvoice")
-  payments       Payment[]
-  receipts       Receipt[]
-  manualPayments InvoiceManualPayment[]
+  session            ParkingSession           @relation("ParkingSessionInvoices", fields: [sessionId], references: [id], onDelete: Cascade)
+  primaryForSession  ParkingSession?          @relation("ParkingSessionPrimaryInvoice")
+  payments           Payment[]
+  receipts           Receipt[]
+  manualPayments     InvoiceManualPayment[]
+  discountDetails    ParkingSessionDiscount[]
+  usedTenantCoupons  TenantCoupon[]           @relation("TenantCouponUsedInvoice")
+  tenantCouponEvents TenantCouponEvent[]
 
   @@index([sessionId])
   @@index([status])
@@ -1194,11 +1376,13 @@ model FeePolicy {
   graceMinutes     Int  @default(0) // 최초 입차 무료 회차 시간
   exitGraceMinutes Int  @default(10) // 결제 후 출차 유예 시간
 
-  registrationGraceMinutes Int @default(10) // 입차 후 직접 등록 유예 시간
-  registrationGraceFee     Int @default(0)  // 등록 유예 시간에 해당하는 요금
-  registrationGraceDiscountEnabled Boolean @default(true)
+  registrationGraceMinutes                  Int     @default(10) // 입차 후 직접 등록 유예 시간
+  registrationGraceFee                      Int     @default(0) // 등록 유예 시간에 해당하는 요금
+  registrationGraceDiscountEnabled          Boolean @default(true)
   authorityRegistrationGraceDiscountEnabled Boolean @default(false)
-  watcherRewardGraceFeeEnabled Boolean @default(false)
+  watcherRewardGraceFeeEnabled              Boolean @default(false)
+
+  taxType FeeTaxType @default(VAT_INCLUDED)
 
   // 🔥 이거 추가 (필수)
   timeRules FeePolicyTimeRule[]
@@ -1247,6 +1431,187 @@ model DiscountProgram {
 
   @@index([feeId])
   @@index([isActive])
+}
+
+/// 할인 자격의 관리 가능한 정의다.
+///
+/// 현재 정책:
+/// - 국가망 또는 공공 API 검증을 수행하지 않는다.
+/// - 회원이 가입/프로필에서 선택한 내용 또는 운영자가 입력한 내용을 신뢰한다.
+///
+/// TODO:
+/// 고객 요구와 승인된 외부 연동 수단이 확보되면 선택적 외부 검증 정보를 추가한다.
+model DiscountEligibilityDefinition {
+  id String @id @default(cuid())
+
+  /// 예: LIGHT_CAR, EV, DISABLED, PREGNANT, VETERAN
+  code String @unique
+  name String
+
+  scope        DiscountEligibilityScope
+  description  String?
+  isActive     Boolean                  @default(true)
+  displayOrder Int                      @default(100)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberDeclarations  MemberEligibilityDeclaration[]
+  vehicleDeclarations VehicleEligibilityDeclaration[]
+  parkingPrograms     ParkingDiscountProgram[]
+
+  @@index([scope])
+  @@index([isActive, displayOrder])
+}
+
+/// 회원 개인에게 귀속되는 자기신고 할인 자격이다.
+///
+/// 예:
+/// - 장애인
+/// - 임산부
+/// - 국가유공자
+/// - 다자녀
+model MemberEligibilityDeclaration {
+  id String @id @default(cuid())
+
+  memberProfileId         String
+  eligibilityDefinitionId String
+
+  isDeclared Boolean                      @default(true)
+  source     EligibilityDeclarationSource @default(MEMBER_PROFILE)
+
+  validFrom  DateTime?
+  validUntil DateTime?
+  declaredAt DateTime  @default(now())
+
+  note String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberProfile         MemberProfile                 @relation(fields: [memberProfileId], references: [id], onDelete: Cascade)
+  eligibilityDefinition DiscountEligibilityDefinition @relation(fields: [eligibilityDefinitionId], references: [id], onDelete: Cascade)
+
+  @@unique([memberProfileId, eligibilityDefinitionId])
+  @@index([eligibilityDefinitionId])
+  @@index([isDeclared])
+  @@index([validUntil])
+}
+
+/// 특정 차량에 귀속되는 자기신고 할인 자격이다.
+///
+/// sizeClass와 powertrainType으로 표현되지 않는 차량 자격도
+/// 이 테이블을 통해 확장할 수 있다.
+model VehicleEligibilityDeclaration {
+  id String @id @default(cuid())
+
+  vehicleId               String
+  eligibilityDefinitionId String
+
+  isDeclared Boolean                      @default(true)
+  source     EligibilityDeclarationSource @default(MEMBER_PROFILE)
+
+  validFrom  DateTime?
+  validUntil DateTime?
+  declaredAt DateTime  @default(now())
+
+  note String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  vehicle               Vehicle                       @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  eligibilityDefinition DiscountEligibilityDefinition @relation(fields: [eligibilityDefinitionId], references: [id], onDelete: Cascade)
+
+  @@unique([vehicleId, eligibilityDefinitionId])
+  @@index([eligibilityDefinitionId])
+  @@index([isDeclared])
+  @@index([validUntil])
+}
+
+/// 특정 주차장에 등록되어 실제 자동 할인 계산에 사용되는 프로그램이다.
+///
+/// 할인 적용 조건:
+/// 1. 프로그램이 해당 주차장에 등록되고 활성 상태일 것
+/// 2. 현재 세션이 회원 세션일 것
+/// 3. 현재 차량이 회원 등록 차량과 일치할 것
+/// 4. 회원 또는 차량이 요구 자격을 자기신고했을 것
+model ParkingDiscountProgram {
+  id String @id @default(cuid())
+
+  parkingLotId            String
+  eligibilityDefinitionId String
+
+  code        String
+  name        String
+  description String?
+
+  benefitType  DiscountBenefitType
+  benefitValue Int
+
+  priority            Int     @default(100)
+  stackable           Boolean @default(true)
+  stackableWithCoupon Boolean @default(true)
+
+  maxDiscountAmount    Int?
+  minimumPayableAmount Int  @default(0)
+
+  isActive   Boolean   @default(true)
+  validFrom  DateTime?
+  validUntil DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  parkingLot            ParkingLot                    @relation(fields: [parkingLotId], references: [id], onDelete: Cascade)
+  eligibilityDefinition DiscountEligibilityDefinition @relation(fields: [eligibilityDefinitionId], references: [id], onDelete: Restrict)
+  appliedDiscounts      ParkingSessionDiscount[]
+
+  @@unique([parkingLotId, code])
+  @@index([parkingLotId, isActive])
+  @@index([eligibilityDefinitionId])
+  @@index([priority])
+  @@index([validFrom, validUntil])
+}
+
+/// 청구서 확정 당시 실제 적용된 할인 내역 스냅샷이다.
+///
+/// 할인 프로그램이나 회원 정보가 나중에 변경되어도
+/// 이미 확정된 Invoice 금액과 할인 내역은 변경하지 않는다.
+model ParkingSessionDiscount {
+  id String @id @default(cuid())
+
+  sessionId String
+  invoiceId String?
+  programId String?
+
+  source DiscountApplicationSource
+
+  eligibilityCodeSnapshot String?
+  programCodeSnapshot     String?
+  programNameSnapshot     String
+
+  benefitTypeSnapshot  String
+  benefitValueSnapshot Int
+
+  baseAmount     Int
+  discountAmount Int
+  appliedOrder   Int @default(1)
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  session ParkingSession          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  invoice Invoice?                @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  program ParkingDiscountProgram? @relation(fields: [programId], references: [id], onDelete: SetNull)
+
+  @@unique([sessionId, programId])
+  @@index([sessionId, appliedOrder])
+  @@index([invoiceId])
+  @@index([programId])
+  @@index([source])
+  @@index([createdAt])
 }
 
 model MonthlySubscription {
@@ -1341,13 +1706,13 @@ model UserDevice {
 //////////////////////////////////////////////////////
 
 model SensorDevice {
-  id           String  @id @default(uuid())
-  name         String
-  type         String
-  serialNumber String  @unique
-  devEui       String? @unique
-  macAddress   String? @unique
-  ipAddress    String?
+  id              String  @id @default(uuid())
+  name            String
+  type            String
+  serialNumber    String  @unique
+  devEui          String? @unique
+  macAddress      String? @unique
+  ipAddress       String?
   installLocation String?
 
   status DeviceStatus  @default(ACTIVE)
@@ -1516,6 +1881,7 @@ model DailySettlement {
   totalOutstanding Int              @default(0)
   status           SettlementStatus @default(OPEN)
   closedAt         DateTime?
+  closedByUserId   String?
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
   parkingLot       ParkingLot       @relation(fields: [parkingLotId], references: [id], onDelete: Cascade)
@@ -1523,6 +1889,7 @@ model DailySettlement {
   @@unique([parkingLotId, businessDate])
   @@index([businessDate])
   @@index([status])
+  @@index([closedByUserId])
 }
 
 //////////////////////////////////////////////////////
@@ -1613,7 +1980,9 @@ model ApprovalRequest {
   requestedParkingLotId   String?
   requestedSectionId      String?
   tenantId                String?
-  tenant                  Tenant? @relation(fields: [tenantId], references: [id])
+  tenant                  Tenant?            @relation(fields: [tenantId], references: [id])
+  managementCompanyId     String?
+  managementCompany       ManagementCompany? @relation(fields: [managementCompanyId], references: [id], onDelete: SetNull)
   memo                    String?
   requestData             Json?
 
@@ -1634,6 +2003,7 @@ model ApprovalRequest {
   @@index([requesterId])
   @@index([reviewedById])
   @@index([requesterId, status])
+  @@index([managementCompanyId])
 }
 
 model PushToken {
@@ -1959,31 +2329,85 @@ model UserBlacklist {
   createdAt DateTime @default(now())
 }
 
-model Tenant {
-  id        String   @id @default(cuid())
-  name      String
-  code      String   @unique
+model ManagementCompany {
+  id             String  @id @default(cuid())
+  name           String
+  code           String  @unique
+  businessNumber String?
+  representative String?
+  contact        String?
+  address        String?
+  memo           String?
+  isActive       Boolean @default(true)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  users              User[]
+  managers           ManagerProfile[]
+  parkingLots        ParkingLot[]
+  edgeNodes          EdgeNode[]
+  tenants            Tenant[]
+  monthlyStatements  TenantMonthlyStatement[]
+  tenantApplications TenantApplication[]
+  approvalRequests   ApprovalRequest[]
+
+  @@index([name])
+  @@index([isActive])
+  @@index([createdAt])
+}
+
+model Tenant {
+  id   String @id @default(cuid())
+  name String
+  code String @unique
+
+  managementCompanyId String?
+  managementCompany   ManagementCompany? @relation(fields: [managementCompanyId], references: [id], onDelete: SetNull)
+
+  parkingLotId String?
+  parkingLot   ParkingLot? @relation("TenantParkingLot", fields: [parkingLotId], references: [id], onDelete: SetNull)
+
+  businessNumber String?
+  representative String?
+  contact        String?
+  billingEmail   String?
+  memo           String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
   users            User[]
   approvalRequests ApprovalRequest[]
-  parkingLots      ParkingLot[]
+  tenantUsers      TenantUser[]
 
-  edgeNodes   EdgeNode[]
-  tenantUsers TenantUser[]
+  parkingSessions    ParkingSession[]          @relation("ParkingSessionVisitTenant")
+  visitConfirmations TenantVisitConfirmation[]
+  charges            TenantCharge[]
+  monthlyStatements  TenantMonthlyStatement[]
+  tenantApplications TenantApplication[]
+
+  couponPurchases TenantCouponPurchase[]
+  coupons         TenantCoupon[]
+
+  appCredential TenantAppCredential?
+
+  @@index([managementCompanyId])
+  @@index([parkingLotId])
+  @@index([isActive])
+  @@index([createdAt])
 }
 
 model Device {
-  id           String     @id @default(cuid())
-  name         String?
-  serialNumber String     @unique
-  devEui       String?    @unique
-  macAddress   String?    @unique
-  ipAddress    String?
+  id              String     @id @default(cuid())
+  name            String?
+  serialNumber    String     @unique
+  devEui          String?    @unique
+  macAddress      String?    @unique
+  ipAddress       String?
   installLocation String?
-  type         DeviceType
-  status       String?    @default("ACTIVE")
+  type            DeviceType
+  status          String?    @default("ACTIVE")
 
   parkingLotId     String?
   parkingSectionId String?
@@ -2151,8 +2575,8 @@ model EdgeNode {
   code String @unique
   name String
 
-  tenantId String?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  managementCompanyId String?
+  managementCompany   ManagementCompany? @relation(fields: [managementCompanyId], references: [id], onDelete: SetNull)
 
   status String @default("ACTIVE")
 
@@ -2170,9 +2594,9 @@ model EdgeNode {
   parkingLots EdgeParkingLot[]
   syncCursors SyncCursor[]
 
-  @@index([tenantId])
   @@index([status])
   @@index([lastSeenAt])
+  @@index([managementCompanyId])
 }
 
 model EdgeNodeKey {
@@ -2364,6 +2788,160 @@ model DisplayBoardModule {
 // MOBILE / QR / WATCHER / ENFORCEMENT
 //////////////////////////////////////////////////////
 
+/// Tenant가 선불로 구매하는 할인권 상품이다.
+model TenantCouponProduct {
+  id String @id @default(cuid())
+
+  parkingLotId String
+  code         String
+  name         String
+  description  String?
+
+  benefitType  DiscountBenefitType
+  benefitValue Int
+  salePrice    Int
+
+  validityMonths                 Int     @default(1)
+  stackableWithAutomaticDiscount Boolean @default(true)
+  isActive                       Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  parkingLot ParkingLot             @relation(fields: [parkingLotId], references: [id], onDelete: Cascade)
+  purchases  TenantCouponPurchase[]
+  coupons    TenantCoupon[]
+
+  @@unique([parkingLotId, code])
+  @@index([parkingLotId, isActive])
+  @@index([createdAt])
+}
+
+/// Tenant의 할인권 구매 요청, 입금 확인 및 수량 발행 기록이다.
+model TenantCouponPurchase {
+  id         String @id @default(cuid())
+  purchaseNo String @unique
+
+  tenantId  String
+  productId String
+
+  quantity    Int
+  unitPrice   Int
+  totalAmount Int
+  paidAmount  Int @default(0)
+
+  status           TenantCouponPurchaseStatus @default(PAYMENT_PENDING)
+  paymentReference String?
+  memo             String?
+
+  requestedByUserId        String?
+  paymentConfirmedByUserId String?
+
+  requestedAt        DateTime  @default(now())
+  paymentConfirmedAt DateTime?
+  issuedAt           DateTime?
+  expiresAt          DateTime?
+  cancelledAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant             Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product            TenantCouponProduct @relation(fields: [productId], references: [id], onDelete: Restrict)
+  requestedBy        User?               @relation("TenantCouponPurchaseRequestedBy", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  paymentConfirmedBy User?               @relation("TenantCouponPurchaseConfirmedBy", fields: [paymentConfirmedByUserId], references: [id], onDelete: SetNull)
+  coupons            TenantCoupon[]
+
+  @@index([tenantId, status])
+  @@index([productId])
+  @@index([requestedAt])
+  @@index([paymentConfirmedAt])
+}
+
+/// 실제 1회 사용 가능한 개별 할인권이다.
+model TenantCoupon {
+  id       String @id @default(cuid())
+  serialNo String @unique
+
+  codeHash   String @unique
+  codeMasked String
+
+  tenantId   String
+  productId  String
+  purchaseId String
+
+  status    TenantCouponStatus @default(AVAILABLE)
+  expiresAt DateTime
+
+  assignedMemberUserId String?
+  assignedByUserId     String?
+  assignedAt           DateTime?
+
+  reservedSessionId    String?   @unique
+  reservationToken     String?   @unique
+  reservationExpiresAt DateTime?
+
+  usedSessionId String?   @unique
+  usedInvoiceId String?
+  usedAt        DateTime?
+
+  cancelledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product  TenantCouponProduct  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  purchase TenantCouponPurchase @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
+
+  assignedMember User? @relation("TenantCouponAssignedMember", fields: [assignedMemberUserId], references: [id], onDelete: SetNull)
+  assignedBy     User? @relation("TenantCouponAssignedBy", fields: [assignedByUserId], references: [id], onDelete: SetNull)
+
+  reservedSession ParkingSession? @relation("TenantCouponReservedSession", fields: [reservedSessionId], references: [id], onDelete: SetNull)
+  usedSession     ParkingSession? @relation("TenantCouponUsedSession", fields: [usedSessionId], references: [id], onDelete: SetNull)
+  usedInvoice     Invoice?        @relation("TenantCouponUsedInvoice", fields: [usedInvoiceId], references: [id], onDelete: SetNull)
+
+  events TenantCouponEvent[]
+
+  @@index([tenantId, status])
+  @@index([productId, status])
+  @@index([purchaseId])
+  @@index([assignedMemberUserId, status])
+  @@index([expiresAt])
+  @@index([usedInvoiceId])
+}
+
+/// 할인권 발행, 증정, 예약, 사용 이력을 기록한다.
+model TenantCouponEvent {
+  id String @id @default(cuid())
+
+  couponId   String
+  eventType  TenantCouponEventType
+  fromStatus TenantCouponStatus?
+  toStatus   TenantCouponStatus?
+
+  actorUserId      String?
+  memberUserId     String?
+  parkingSessionId String?
+  invoiceId        String?
+
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  coupon         TenantCoupon    @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  actor          User?           @relation("TenantCouponEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  member         User?           @relation("TenantCouponEventMember", fields: [memberUserId], references: [id], onDelete: SetNull)
+  parkingSession ParkingSession? @relation(fields: [parkingSessionId], references: [id], onDelete: SetNull)
+  invoice        Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([couponId, createdAt])
+  @@index([eventType])
+  @@index([actorUserId])
+  @@index([memberUserId])
+  @@index([parkingSessionId])
+  @@index([invoiceId])
+}
+
 model TenantUser {
   id String @id @default(cuid())
 
@@ -2378,8 +2956,194 @@ model TenantUser {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  pinHash     String?
+  lastLoginAt DateTime?
+
   @@unique([tenantId, userId, role])
   @@index([userId])
+  @@index([tenantId])
+  @@index([status])
+}
+
+model TenantAppCredential {
+  id String @id @default(cuid())
+
+  tenantId       String @unique
+  tenant         Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  businessNumber String @unique
+  pinHash        String
+
+  lastLoginAt  DateTime?
+  pinUpdatedAt DateTime  @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  visitConfirmations TenantVisitConfirmation[] @relation("TenantVisitConfirmedByCredential")
+
+  @@index([businessNumber])
+  @@index([tenantId])
+}
+
+model TenantApplication {
+  id                  String             @id @default(cuid())
+  parkingLotId        String
+  parkingLot          ParkingLot         @relation(fields: [parkingLotId], references: [id], onDelete: Cascade)
+  managementCompanyId String?
+  managementCompany   ManagementCompany? @relation(fields: [managementCompanyId], references: [id], onDelete: SetNull)
+  tenantId            String?
+  tenant              Tenant?            @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  companyName    String
+  businessNumber String?
+  representative String?
+  contact        String?
+  billingEmail   String?
+  applicantName  String?
+  applicantPhone String?
+  applicantEmail String?
+  memo           String?
+
+  status TenantApplicationStatus @default(PENDING)
+
+  approvedAt       DateTime?
+  approvedByUserId String?
+  approvedBy       User?     @relation("TenantApplicationApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+
+  rejectedAt       DateTime?
+  rejectedByUserId String?
+  rejectedBy       User?     @relation("TenantApplicationRejectedBy", fields: [rejectedByUserId], references: [id], onDelete: SetNull)
+  rejectReason     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  pinHash String?
+
+  @@index([parkingLotId])
+  @@index([managementCompanyId])
+  @@index([tenantId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([businessNumber])
+}
+
+model TenantVisitConfirmation {
+  id String @id @default(cuid())
+
+  tenantId         String
+  parkingSessionId String
+  parkingLotId     String
+  parkingSectionId String?
+  parkingSpaceId   String?
+
+  confirmedByUserId       String?
+  confirmedByCredentialId String?
+  confirmedAt             DateTime @default(now())
+
+  vehiclePlate String?
+  contactPhone String?
+  entryTime    DateTime?
+
+  coveredAmount Int       @default(0)
+  coveredUntil  DateTime?
+
+  graceMinutes Int
+  graceUntil   DateTime?
+
+  note   String?
+  status TenantVisitConfirmationStatus @default(CONFIRMED)
+
+  tenant                Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parkingSession        ParkingSession       @relation(fields: [parkingSessionId], references: [id], onDelete: Cascade)
+  parkingLot            ParkingLot           @relation(fields: [parkingLotId], references: [id], onDelete: Cascade)
+  parkingSpace          ParkingSpace?        @relation(fields: [parkingSpaceId], references: [id], onDelete: SetNull)
+  confirmedByUser       User?                @relation("TenantVisitConfirmedBy", fields: [confirmedByUserId], references: [id], onDelete: SetNull)
+  confirmedByCredential TenantAppCredential? @relation("TenantVisitConfirmedByCredential", fields: [confirmedByCredentialId], references: [id], onDelete: SetNull)
+
+  charges TenantCharge[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([parkingSessionId, tenantId])
+  @@index([tenantId])
+  @@index([parkingSessionId])
+  @@index([parkingLotId])
+  @@index([parkingSpaceId])
+  @@index([confirmedByUserId])
+  @@index([confirmedByCredentialId])
+  @@index([confirmedAt])
+  @@index([status])
+}
+
+model TenantCharge {
+  id String @id @default(cuid())
+
+  tenantId                  String
+  parkingSessionId          String
+  tenantVisitConfirmationId String?
+  parkingLotId              String
+  parkingSpaceId            String?
+
+  chargeType   TenantChargeType
+  amount       Int
+  occurredAt   DateTime
+  billingMonth String
+
+  status TenantChargeStatus @default(PENDING)
+  memo   String?
+
+  tenant                  Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parkingSession          ParkingSession           @relation(fields: [parkingSessionId], references: [id], onDelete: Cascade)
+  tenantVisitConfirmation TenantVisitConfirmation? @relation(fields: [tenantVisitConfirmationId], references: [id], onDelete: SetNull)
+  parkingLot              ParkingLot               @relation(fields: [parkingLotId], references: [id], onDelete: Cascade)
+  parkingSpace            ParkingSpace?            @relation(fields: [parkingSpaceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([parkingSessionId])
+  @@index([tenantVisitConfirmationId])
+  @@index([parkingLotId])
+  @@index([parkingSpaceId])
+  @@index([billingMonth])
+  @@index([status])
+  @@index([occurredAt])
+}
+
+model TenantMonthlyStatement {
+  id String @id @default(cuid())
+
+  tenantId            String
+  parkingLotId        String
+  managementCompanyId String
+
+  billingMonth String
+  totalAmount  Int    @default(0)
+  visitCount   Int    @default(0)
+
+  status TenantMonthlyStatementStatus @default(DRAFT)
+
+  closedAt       DateTime?
+  closedByUserId String?
+  memo           String?
+
+  tenant            Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parkingLot        ParkingLot        @relation(fields: [parkingLotId], references: [id], onDelete: Cascade)
+  managementCompany ManagementCompany @relation(fields: [managementCompanyId], references: [id], onDelete: Cascade)
+  closedByUser      User?             @relation("TenantStatementClosedBy", fields: [closedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, billingMonth])
+  @@index([parkingLotId])
+  @@index([managementCompanyId])
+  @@index([billingMonth])
+  @@index([status])
+  @@index([closedByUserId])
 }
 
 model ParkingLotPhoto {
@@ -2663,7 +3427,6 @@ model AuthorityRegistrationReviewHistory {
   @@index([newStatus])
   @@index([createdAt])
 }
-
 
 //////////////////////////////////////////////////////
 // CONTROL PANEL

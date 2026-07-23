@@ -40,9 +40,14 @@ import { PlateRecognitionModule } from './modules/plate-recognition/plate-recogn
 import { FilesModule } from './modules/files/files.module';
 import { RegistrationReviewModule } from './modules/registration-review/registration-review.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
+import { ManagementCompaniesModule } from './modules/management-companies/management-companies.module';
 
+import { EdgeNodesModule } from './modules/edge-nodes/edge-nodes.module';
+import { TenantAppModule } from './modules/tenant-app/tenant-app.module';
 @Module({
   imports: [
+    TenantAppModule,
+    EdgeNodesModule,
     ControlPanelModule,
     ConfigModule.forRoot({
       isGlobal: true,
@@ -89,6 +94,7 @@ import { TenantsModule } from './modules/tenants/tenants.module';
     WatcherModule,
     PublicParkingModule,
         TenantsModule,
+        ManagementCompaniesModule,
 ],
 })
 export class AppModule {}

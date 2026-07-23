@@ -44,6 +44,33 @@ export class ParkingSessionsController {
 
 
 
+  @Post('manual-entry')
+  manualEntry(
+    @CurrentUser() user: AuthUser,
+    @Body()
+    dto: {
+      parkingSpaceId?: string | null;
+      plateNumber?: string | null;
+      contactNumber?: string | null;
+    },
+  ) {
+    return this.parkingSessionsService.manualEntry(user, dto);
+  }
+
+  @Post(':id/manual-exit')
+  manualExit(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body()
+    dto: {
+      collectedAmount?: number | string | null;
+      paymentMethod?: string | null;
+      note?: string | null;
+    },
+  ) {
+    return this.parkingSessionsService.manualExit(user, id, dto);
+  }
+
   @Post(':id/registration-photo')
   addRegistrationPhoto(
     @CurrentUser() user: AuthUser,
@@ -56,6 +83,23 @@ export class ParkingSessionsController {
     },
   ) {
     return this.parkingSessionsService.addRegistrationPhoto(user.sub, id, dto);
+  }
+
+  @Post(':id/action-log')
+  recordActionLog(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body()
+    dto: {
+      type?: string;
+      note?: string;
+      action?: string;
+      reason?: string;
+      elapsedMinutes?: number;
+      paidExitMinutes?: number;
+    },
+  ) {
+    return this.parkingSessionsService.recordActionLog(user.sub, id, dto);
   }
 
   @Post(':id/manual-payment')

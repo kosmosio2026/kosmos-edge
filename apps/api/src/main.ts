@@ -9,6 +9,9 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
   app.use('/uploads', express.static(join(process.cwd(), '../../uploads')));
 
   const config = app.get(ConfigService);

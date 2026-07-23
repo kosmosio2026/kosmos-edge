@@ -82,13 +82,68 @@ function statusBadge(status: string) {
   return 'bg-slate-100 text-slate-700';
 }
 
+function statusLabel(status: string) {
+  if (status === 'PENDING') return '대기';
+  if (status === 'APPROVED') return '승인';
+  if (status === 'REJECTED') return '거절';
+  return status || '-';
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return '-';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleString('ko-KR', {
+    year: '2-digit',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
+function getHandler(item: WatcherApplication) {
+  if (item.status === 'APPROVED') {
+    return item.approvedBy?.name ?? item.approvedBy?.email ?? '-';
+  }
+
+  if (item.status === 'REJECTED') {
+    return item.rejectedBy?.name ?? item.rejectedBy?.email ?? '-';
+  }
+
+  return '-';
+}
+
+function getWatcherName(item: WatcherApplication) {
+  return item.watcher?.name ?? '-';
+}
+
+function getWatcherEmail(item: WatcherApplication) {
+  return item.watcher?.email ?? '-';
+}
+
+function getWatcherPhone(item: WatcherApplication) {
+  return item.watcher?.phone ?? '-';
+}
+
+function getParkingLotRegion(item: WatcherApplication) {
+  return [item.parkingLot?.region, item.parkingLot?.district]
+    .filter(Boolean)
+    .join(' ') || '-';
+}
+
 export default function WatcherApprovalsPage({ role }: Props) {
   const [items, setItems] = useState<WatcherApplication[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState<Record<string, string>>({});
+  const [selectedDetail, setSelectedDetail] = useState<WatcherApplication | null>(null);
 
-  const title = role === 'admin' ? 'Admin Watcher 승인 관리' : 'Manager Watcher 승인 관리';
+  const title = role === 'admin' ? 'Watcher 승인 관리' : 'Watcher 승인 관리';
   const apiPrefix = role === 'admin' ? '/admin/watcher-applications' : '/manager/watcher-applications';
 
   async function load() {
@@ -97,7 +152,7 @@ export default function WatcherApprovalsPage({ role }: Props) {
 
     try {
       const json = await apiFetch(apiPrefix);
-      setItems(json);
+      setItems(Array.isArray(json) ? json : []);
     } catch (err: any) {
       setMessage(err.message ?? 'Watcher 신청 목록을 불러오지 못했습니다.');
     } finally {
@@ -138,137 +193,251 @@ export default function WatcherApprovalsPage({ role }: Props) {
   }
 
   useEffect(() => {
-    load();
+    void load();
   }, []);
 
   return (
-    <main className="min-h-screen bg-slate-50 px-6 py-6 w-full max-w-none">
-      <section className="w-full max-w-none">
+    <main className="min-h-screen w-full max-w-none bg-slate-50 px-6 py-6">
+      <section className="w-full max-w-none space-y-5">
         <div className="rounded-3xl bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
               <p className="text-sm font-semibold text-blue-600">WATCHER APPROVAL</p>
               <h1 className="mt-1 text-2xl font-bold">{title}</h1>
               <p className="mt-2 text-sm text-slate-500">
-                Watcher가 신청한 주차장 담당 권한을 승인하거나 거절합니다.
+                Watcher가 신청한 주차장 담당 권한을 테이블에서 승인하거나 거절합니다.
               </p>
             </div>
 
             <button
-              onClick={load}
-              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold"
+              type="button"
+              onClick={() => void load()}
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold hover:bg-slate-50"
             >
               새로고침
             </button>
           </div>
 
-          {message && (
+          {message ? (
             <div className="mt-5 rounded-2xl bg-slate-100 p-4 text-sm text-slate-700">
               {message}
             </div>
-          )}
+          ) : null}
         </div>
 
-        <div className="mt-5 overflow-hidden rounded-3xl bg-white shadow-sm">
+        <div className="overflow-hidden rounded-3xl bg-white shadow-sm">
           {loading ? (
             <div className="p-6 text-sm text-slate-500">불러오는 중입니다...</div>
           ) : items.length === 0 ? (
             <div className="p-6 text-sm text-slate-500">Watcher 신청 내역이 없습니다.</div>
           ) : (
-            <div className="divide-y divide-slate-100">
-              {items.map((item) => {
-                const pending = item.status === 'PENDING';
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1120px] text-left text-sm">
+                <thead className="bg-slate-50 text-slate-600">
+                  <tr>
+                    <th className="whitespace-nowrap px-4 py-3">번호</th>
+                    <th className="whitespace-nowrap px-4 py-3">상태</th>
+                    <th className="whitespace-nowrap px-4 py-3">신청자</th>
+                    <th className="whitespace-nowrap px-4 py-3">전화번호</th>
+                    <th className="whitespace-nowrap px-4 py-3">주차장</th>
+                    <th className="whitespace-nowrap px-4 py-3">지역</th>
+                    <th className="whitespace-nowrap px-4 py-3">신청일</th>
+                    <th className="whitespace-nowrap px-4 py-3">처리 정보</th>
+                    <th className="whitespace-nowrap px-4 py-3">관리</th>
+                  </tr>
+                </thead>
 
-                return (
-                  <div key={item.id} className="p-6">
-                    <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
+                <tbody>
+                  {items.map((item, index) => {
+                    const pending = item.status === 'PENDING';
+                    const parkingLotName = item.parkingLot?.name ?? '주차장 정보 없음';
+                    const parkingLotCode = item.parkingLot?.code ?? '-';
+                    const region = getParkingLotRegion(item);
+
+                    return (
+                      <tr key={item.id} className="border-t align-top">
+                        <td className="whitespace-nowrap px-4 py-3">{index + 1}</td>
+
+                        <td className="whitespace-nowrap px-4 py-3">
                           <span
-                            className={`rounded-full px-3 py-1 text-xs font-bold ${statusBadge(item.status)}`}
+                            className={`inline-flex whitespace-nowrap rounded-full px-3 py-1 text-xs font-bold ${statusBadge(item.status)}`}
                           >
-                            {item.status}
+                            {statusLabel(item.status)}
                           </span>
-                          <span className="text-xs text-slate-400">
-                            신청일: {item.requestedAt ? new Date(item.requestedAt).toLocaleString() : '-'}
-                          </span>
-                        </div>
+                        </td>
 
-                        <h2 className="mt-3 text-lg font-bold">
-                          {item.parkingLot?.name ?? '주차장 정보 없음'}
-                        </h2>
-                        <p className="mt-1 text-sm text-slate-500">
-                          {item.parkingLot?.address ?? '-'}
-                        </p>
-
-                        <div className="mt-4 grid w-full gap-4 text-sm md:grid-cols-2">
-                          <div className="rounded-2xl bg-slate-50 p-4">
-                            <p className="text-xs font-semibold text-slate-400">신청자</p>
-                            <p className="mt-1 font-semibold">{item.watcher?.name ?? '-'}</p>
-                            <p className="text-slate-500">{item.watcher?.email ?? '-'}</p>
-                            <p className="text-slate-500">{item.watcher?.phone ?? '-'}</p>
-                          </div>
-
-                          <div className="rounded-2xl bg-slate-50 p-4">
-                            <p className="text-xs font-semibold text-slate-400">주차장</p>
-                            <p className="mt-1 font-semibold">{item.parkingLot?.code ?? '-'}</p>
-                            <p className="text-slate-500">
-                              {item.parkingLot?.region ?? '-'} {item.parkingLot?.district ?? ''}
-                            </p>
-                          </div>
-                        </div>
-
-                        {item.status === 'APPROVED' && (
-                          <p className="mt-3 text-sm text-emerald-700">
-                            승인일: {item.approvedAt ? new Date(item.approvedAt).toLocaleString() : '-'}
-                          </p>
-                        )}
-
-                        {item.status === 'REJECTED' && (
-                          <p className="mt-3 text-sm text-red-700">
-                            거절일: {item.rejectedAt ? new Date(item.rejectedAt).toLocaleString() : '-'}
-                            {item.rejectedReason ? ` · 사유: ${item.rejectedReason}` : ''}
-                          </p>
-                        )}
-                      </div>
-
-                      {pending && (
-                        <div className="w-full shrink-0 space-y-2 lg:w-80">
+                        <td className="whitespace-nowrap px-4 py-3 font-semibold">
                           <button
-                            onClick={() => approve(item.id)}
-                            className="w-full rounded-2xl bg-blue-600 px-4 py-3 text-sm font-bold text-white"
+                            type="button"
+                            onClick={() => setSelectedDetail(item)}
+                            className="text-left font-semibold text-blue-600 underline-offset-2 hover:underline"
                           >
-                            승인
+                            {getWatcherName(item)}
                           </button>
+                        </td>
 
-                          <input
-                            value={rejectReason[item.id] ?? ''}
-                            onChange={(event) =>
-                              setRejectReason((prev) => ({
-                                ...prev,
-                                [item.id]: event.target.value,
-                              }))
-                            }
-                            placeholder="거절 사유를 입력하세요."
-                            className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm"
-                          />
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-600">
+                          {getWatcherPhone(item)}
+                        </td>
 
-                          <button
-                            onClick={() => reject(item.id)}
-                            className="w-full rounded-2xl bg-red-600 px-4 py-3 text-sm font-bold text-white"
-                          >
-                            거절
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+                        <td className="px-4 py-3">
+                          <div className="whitespace-nowrap font-semibold text-slate-900">
+                            {parkingLotName}
+                          </div>
+                          <div className="mt-1 whitespace-nowrap text-xs text-slate-500">
+                            코드: {parkingLotCode}
+                          </div>
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-600">
+                          {region}
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-600">
+                          {formatDate(item.requestedAt)}
+                        </td>
+
+                        <td className="px-4 py-3 text-slate-600">
+                          {item.status === 'APPROVED' ? (
+                            <div className="whitespace-nowrap">
+                              <div>승인일: {formatDate(item.approvedAt)}</div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                처리자: {getHandler(item)}
+                              </div>
+                            </div>
+                          ) : item.status === 'REJECTED' ? (
+                            <div className="whitespace-nowrap">
+                              <div>거절일: {formatDate(item.rejectedAt)}</div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                처리자: {getHandler(item)}
+                              </div>
+                              {item.rejectedReason ? (
+                                <div className="mt-1 text-xs text-red-600">
+                                  사유: {item.rejectedReason}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : (
+                            '-'
+                          )}
+                        </td>
+
+                        <td className="px-4 py-3">
+                          {pending ? (
+                            <div className="flex min-w-[260px] flex-col gap-2">
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => void approve(item.id)}
+                                  className="whitespace-nowrap rounded-xl bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-700"
+                                >
+                                  승인
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => void reject(item.id)}
+                                  className="whitespace-nowrap rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700"
+                                >
+                                  거절
+                                </button>
+                              </div>
+
+                              <input
+                                value={rejectReason[item.id] ?? ''}
+                                onChange={(event) =>
+                                  setRejectReason((prev) => ({
+                                    ...prev,
+                                    [item.id]: event.target.value,
+                                  }))
+                                }
+                                placeholder="거절 사유"
+                                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs outline-none focus:border-blue-500"
+                              />
+                            </div>
+                          ) : (
+                            <span className="whitespace-nowrap text-xs text-slate-400">처리 완료</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
       </section>
+
+      {selectedDetail ? (
+        <WatcherDetailModal
+          item={selectedDetail}
+          onClose={() => setSelectedDetail(null)}
+        />
+      ) : null}
     </main>
+  );
+}
+
+function WatcherDetailModal({
+  item,
+  onClose,
+}: {
+  item: WatcherApplication;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-2xl">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">Watcher 신청 상세정보</h2>
+            <p className="mt-1 text-sm text-slate-500">{getWatcherName(item)}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border px-3 py-1 text-sm hover:bg-slate-50"
+          >
+            닫기
+          </button>
+        </div>
+
+        <div className="space-y-3 text-sm">
+          <DetailRow label="신청자" value={getWatcherName(item)} />
+          <DetailRow label="이메일" value={getWatcherEmail(item)} />
+          <DetailRow label="전화번호" value={getWatcherPhone(item)} />
+          <DetailRow label="상태" value={statusLabel(item.status)} />
+          <DetailRow label="신청일" value={formatDate(item.requestedAt)} />
+          <DetailRow label="주차장" value={item.parkingLot?.name ?? '-'} />
+          <DetailRow label="주차장 코드" value={item.parkingLot?.code ?? '-'} />
+          <DetailRow label="지역" value={getParkingLotRegion(item)} />
+          <DetailRow label="주소" value={item.parkingLot?.address ?? '-'} />
+          <DetailRow label="처리자" value={getHandler(item)} />
+          <DetailRow label="승인일" value={formatDate(item.approvedAt)} />
+          <DetailRow label="거절일" value={formatDate(item.rejectedAt)} />
+          <DetailRow label="거절 사유" value={item.rejectedReason ?? '-'} />
+        </div>
+
+        <div className="mt-6 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+          >
+            확인
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value?: string | null }) {
+  return (
+    <div className="flex justify-between gap-4 border-b pb-2">
+      <span className="whitespace-nowrap text-slate-500">{label}</span>
+      <span className="text-right font-medium text-slate-900">{value ?? '-'}</span>
+    </div>
   );
 }

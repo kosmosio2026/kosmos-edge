@@ -36,7 +36,12 @@ export async function POST(request: NextRequest) {
 
     await setSession(session);
 
-    return NextResponse.json({ ok: true, user: session.user });
+    return NextResponse.json({
+      ok: true,
+      accessToken: session.accessToken,
+      refreshToken: backendSession.refreshToken,
+      user: session.user,
+    });
   } catch (error) {
     return NextResponse.json(
       {

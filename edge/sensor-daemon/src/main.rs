@@ -1,13 +1,13 @@
-mod proto;
 mod config;
 mod db;
+mod proto;
 mod ws;
 
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, QoS};
 use serde::Deserialize;
@@ -15,11 +15,7 @@ use sqlx::PgPool;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
-use db::{
-    insert_sensio,
-    insert_parking_sensor,
-    insert_kosmos_tracker,
-};
+use db::{insert_kosmos_tracker, insert_parking_sensor, insert_sensio};
 
 use ws::run_ws_server;
 
@@ -84,16 +80,14 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let db_url = std::env::var("DATABASE_URL")
-        .context("DATABASE_URL must be set")?;
+    let db_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
     let pool = PgPool::connect(&db_url)
         .await
         .context("failed to connect to Postgres")?;
 
     info!("Connected to PostgreSQL");
 
-    let cfg = config::Config::load("apps.toml")
-        .expect("Failed to load apps.toml");
+    let cfg = config::Config::load("apps.toml").expect("Failed to load apps.toml");
     let cfg = Arc::new(cfg);
 
     // Run MQTT + WebSocket concurrently
@@ -175,8 +169,10 @@ async fn mqtt_loop(pool: PgPool, cfg: Arc<config::Config>) {
                                     &topic,
                                     &payload,
                                     &pool_cloned,
-                                    &cfg_cloned
-                                ).await {
+                                    &cfg_cloned,
+                                )
+                                .await
+                                {
                                     error!("uplink error on topic {}: {}", topic, e);
                                 }
                             });
@@ -204,8 +200,8 @@ async fn handle_application_uplink(
     pool: &PgPool,
     cfg: &config::Config,
 ) -> Result<(), String> {
-    let uplink: Uplink = serde_json::from_slice(payload)
-        .map_err(|e| format!("JSON parse error: {e}"))?;
+    let uplink: Uplink =
+        serde_json::from_slice(payload).map_err(|e| format!("JSON parse error: {e}"))?;
 
     let app_id = uplink.deviceInfo.applicationId.as_str();
 
@@ -219,7 +215,9 @@ async fn handle_application_uplink(
 
     let dev_eui = uplink.deviceInfo.devEui.clone();
 
-    let time_parsed: DateTime<Utc> = uplink.time.parse()
+    let time_parsed: DateTime<Utc> = uplink
+        .time
+        .parse()
         .map_err(|e| format!("invalid time format: {e}"))?;
 
     let dr = uplink.dr;
@@ -236,29 +234,58 @@ async fn handle_application_uplink(
         .decode(uplink.data.as_bytes())
         .map_err(|e| format!("base64 decode error: {e}"))?;
 
-    let parsed = proto::parse_packet(&raw)
-        .map_err(|e| format!("packet parse error: {e}"))?;
+    let parsed = proto::parse_packet(&raw).map_err(|e| format!("packet parse error: {e}"))?;
 
     match parsed {
         proto::ParsedPacket::SensioEnv(data) => {
             insert_sensio(
-                &dev_eui, &gateway_id, time_parsed, dr, fcnt, fport,
-                rssi, snr, channel, &data, pool
-            ).await?;
+                &dev_eui,
+                &gateway_id,
+                time_parsed,
+                dr,
+                fcnt,
+                fport,
+                rssi,
+                snr,
+                channel,
+                &data,
+                pool,
+            )
+            .await?;
         }
 
         proto::ParsedPacket::KosmosSensor(data) => {
             insert_parking_sensor(
-                &dev_eui, &gateway_id, time_parsed, dr, fcnt, fport,
-                rssi, snr, channel, &data, pool
-            ).await?;
+                &dev_eui,
+                &gateway_id,
+                time_parsed,
+                dr,
+                fcnt,
+                fport,
+                rssi,
+                snr,
+                channel,
+                &data,
+                pool,
+            )
+            .await?;
         }
 
         proto::ParsedPacket::KosmosTracker(data) => {
             insert_kosmos_tracker(
-                &dev_eui, &gateway_id, time_parsed, dr, fcnt, fport,
-                rssi, snr, channel, &data, pool
-            ).await?;
+                &dev_eui,
+                &gateway_id,
+                time_parsed,
+                dr,
+                fcnt,
+                fport,
+                rssi,
+                snr,
+                channel,
+                &data,
+                pool,
+            )
+            .await?;
         }
     }
 

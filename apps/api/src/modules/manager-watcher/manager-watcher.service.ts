@@ -25,7 +25,7 @@ export class ManagerWatcherService {
         watcher: true,
         parkingLot: {
           include: {
-            tenant: true,
+            managementCompany: true,
           },
         },
         approvedBy: true,
@@ -130,7 +130,7 @@ export class ManagerWatcherService {
     if (tenantIds.length > 0) {
       const lots = await this.prisma.parkingLot.findMany({
         where: {
-          tenantId: {
+          managementCompanyId: {
             in: tenantIds,
           },
         },

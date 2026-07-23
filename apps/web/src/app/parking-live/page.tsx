@@ -6,9 +6,10 @@ import {
   clearTokens,
   getAccessToken,
   getLiveParkingSpaces,
+  manualEntryParkingSession,
+  manualExitParkingSession,
   mockCompletePayment,
   registerParkingSession,
-  sendSensorEvent,
   type LiveSpace,
   type LiveSpaceState,
 } from '@/lib/api';
@@ -69,6 +70,22 @@ function canRegister(space: LiveSpace) {
     space.state === 'UNREGISTERED_OVERDUE' ||
     (isLongParkingAlert(space) &&
       space.activeSession?.isRegistered === false)
+  );
+}
+
+function isManualLot(space: LiveSpace) {
+  return space.parkingLotOperationMode === 'MANUAL';
+}
+
+function canManualEntry(space: LiveSpace) {
+  return isManualLot(space) && !space.activeSession;
+}
+
+function canManualExit(space: LiveSpace) {
+  return (
+    isManualLot(space) &&
+    space.activeSession?.entrySource === 'MANUAL' &&
+    !space.activeSession?.exitTime
   );
 }
 
@@ -312,7 +329,7 @@ export default function ParkingLivePage() {
     try {
       setError(null);
 
-      const result = await getLiveParkingSpaces();
+      const result = await getLiveParkingSpaces(requireAccessToken());
 
       setSpaces(result.spaces);
       setGeneratedAt(result.generatedAt);
@@ -351,44 +368,68 @@ export default function ParkingLivePage() {
     };
   }, [router]);
 
-  async function onOccupied(space: LiveSpace) {
-    if (!space.sensor?.devEui) {
-      setError('This space has no sensor devEui.');
-      return;
-    }
+  async function onManualEntry(space: LiveSpace) {
+    const plateNumber = window.prompt('차량번호를 입력하세요. 빈 값으로 두면 미등록 입차로 처리됩니다.', '')?.trim() ?? '';
+    const contactNumber = window.prompt('연락처를 입력하세요. 선택 입력입니다.', '')?.trim() ?? '';
 
     setBusySpaceId(space.spaceId);
 
     try {
-      await sendSensorEvent(space.sensor.devEui, 'OCCUPIED');
+      const accessToken = requireAccessToken();
+
+      await manualEntryParkingSession(
+        {
+          parkingSpaceId: space.spaceId,
+          plateNumber: plateNumber || null,
+          contactNumber: contactNumber || null,
+        },
+        accessToken,
+      );
+
       await load();
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : 'Failed to send OCCUPIED event',
+          : '수동 입차 등록에 실패했습니다.',
       );
     } finally {
       setBusySpaceId(null);
     }
   }
 
-  async function onEmpty(space: LiveSpace) {
-    if (!space.sensor?.devEui) {
-      setError('This space has no sensor devEui.');
+  async function onManualExit(space: LiveSpace) {
+    const sessionId = space.activeSession?.id;
+
+    if (!sessionId) {
+      setError('출차 처리할 수동 입차 세션이 없습니다.');
       return;
     }
+
+    const amountText = window.prompt('수금한 금액을 입력하세요. 수금하지 않았으면 비워두세요.', '')?.trim() ?? '';
+    const note = window.prompt('출차 메모를 입력하세요. 선택 입력입니다.', '')?.trim() ?? '';
 
     setBusySpaceId(space.spaceId);
 
     try {
-      await sendSensorEvent(space.sensor.devEui, 'EMPTY');
+      const accessToken = requireAccessToken();
+
+      await manualExitParkingSession(
+        sessionId,
+        {
+          collectedAmount: amountText || null,
+          paymentMethod: amountText ? 'CASH' : null,
+          note: note || null,
+        },
+        accessToken,
+      );
+
       await load();
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : 'Failed to send EMPTY event',
+          : '수동 출차 등록에 실패했습니다.',
       );
     } finally {
       setBusySpaceId(null);
@@ -471,7 +512,7 @@ export default function ParkingLivePage() {
         <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-sm font-semibold text-blue-600">
-              Kosmos Parking Console
+              KOSMOS 주차관제 콘솔
             </p>
 
             <h1 className="mt-1 text-3xl font-bold text-slate-950">
@@ -769,23 +810,26 @@ export default function ParkingLivePage() {
                       </div>
                     ) : null}
 
-                    <div className="grid grid-cols-2 gap-2 pt-2">
-                      <button
-                        disabled={busy || !space.sensor}
-                        onClick={() => onOccupied(space)}
-                        className="rounded-xl bg-yellow-300 px-3 py-2 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        Occupied
-                      </button>
 
+                    {canManualEntry(space) ? (
                       <button
-                        disabled={busy || !space.sensor}
-                        onClick={() => onEmpty(space)}
-                        className="rounded-xl bg-slate-200 px-3 py-2 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={busy}
+                        onClick={() => onManualEntry(space)}
+                        className="w-full rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
                       >
-                        Empty
+                        입차 등록
                       </button>
-                    </div>
+                    ) : null}
+
+                    {canManualExit(space) ? (
+                      <button
+                        disabled={busy}
+                        onClick={() => onManualExit(space)}
+                        className="w-full rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                      >
+                        출차 등록
+                      </button>
+                    ) : null}
 
                     {canRegister(space) ? (
                       <button

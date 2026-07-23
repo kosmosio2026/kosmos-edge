@@ -30,7 +30,7 @@ type ApprovalScopeItem = {
   name?: string | null;
   code?: string | null;
   approved?: boolean | null;
-  is승인?: boolean | null;
+  isApproved?: boolean | null;
   status?: string | null;
   spaces?: number | null;
   spaceCount?: number | null;
@@ -44,7 +44,7 @@ type StaffUser = {
   company?: string | null;
   phone?: string | null;
   status?: string | null;
-  is승인?: boolean | null;
+  isApproved?: boolean | null;
   roles?: string[];
   role?: string | null;
   approvedAt?: string | null;
@@ -59,17 +59,58 @@ type StaffUser = {
   };
 };
 
-function formatDate(value?: string | null) {
+const ROLE_LABELS: Record<string, string> = {
+  ADMIN: '관리자',
+  MANAGER: '매니저',
+  OPERATOR: '운영자',
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  ACTIVE: '활성',
+  PENDING: '승인대기',
+  APPROVED: '승인',
+  SUSPENDED: '정지',
+  REJECTED: '거절',
+};
+
+function getRoleLabel(role?: string | null) {
+  if (!role) return '-';
+  return ROLE_LABELS[role] ?? role;
+}
+
+function getRoleText(row: StaffUser) {
+  if (row.roles?.length) {
+    return row.roles.map(getRoleLabel).join(', ');
+  }
+
+  return getRoleLabel(row.role);
+}
+
+function getStatusLabel(status?: string | null) {
+  if (!status) return '-';
+  return STATUS_LABELS[status] ?? status;
+}
+
+function formatCompactDateTime(value?: string | Date | null) {
   if (!value) return '-';
 
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
+  if (Number.isNaN(date.getTime())) return '-';
 
-  return date.toLocaleString();
+  const pad = (num: number) => String(num).padStart(2, '0');
+
+  const yy = pad(date.getFullYear() % 100);
+  const mm = pad(date.getMonth() + 1);
+  const dd = pad(date.getDate());
+  const hh = pad(date.getHours());
+  const mi = pad(date.getMinutes());
+  const ss = pad(date.getSeconds());
+
+  return `${yy}.${mm}.${dd} ${hh}:${mi}:${ss}`;
 }
 
-function is승인Scope(item: ApprovalScopeItem) {
-  if (item.approved === true || item.is승인 === true) return true;
+function isApprovedScope(item: ApprovalScopeItem) {
+  if (item.approved === true || item.isApproved === true) return true;
   return item.status === 'APPROVED';
 }
 
@@ -93,8 +134,18 @@ function getApprovalSummary(row: StaffUser, roleType: StaffRole) {
 
   return {
     requested: scopes.length,
-    approved: scopes.filter(is승인Scope).length,
+    approved: scopes.filter(isApprovedScope).length,
   };
+}
+
+function getScopeLabel(row: StaffUser, roleType: StaffRole) {
+  const summary = getApprovalSummary(row, roleType);
+
+  if (summary.requested <= 0) {
+    return roleType === 'managers' ? '주차장 없음' : '구역 없음';
+  }
+
+  return `${summary.approved}/${summary.requested} 승인`;
 }
 
 export default function StaffUsersPage({ roleType, title }: Props) {
@@ -127,6 +178,7 @@ export default function StaffUsersPage({ roleType, title }: Props) {
         row.phone,
         row.status,
         row.roles?.join(', '),
+        row.role,
       ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(keyword));
@@ -238,7 +290,6 @@ export default function StaffUsersPage({ roleType, title }: Props) {
             <tr>
               <Th>번호</Th>
               <Th>이름</Th>
-              <Th>이메일</Th>
               {roleType === 'managers' ? <Th>회사</Th> : null}
               {roleType === 'operators' ? <Th>구역</Th> : null}
               <Th>전화번호</Th>
@@ -253,7 +304,7 @@ export default function StaffUsersPage({ roleType, title }: Props) {
             {loading ? (
               <tr>
                 <td
-                  colSpan={roleType === 'managers' ? 9 : 9}
+                  colSpan={8}
                   className="px-5 py-10 text-center text-slate-500"
                 >
                   불러오는 중...
@@ -262,7 +313,7 @@ export default function StaffUsersPage({ roleType, title }: Props) {
             ) : pagedRows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={roleType === 'managers' ? 9 : 9}
+                  colSpan={8}
                   className="px-5 py-10 text-center text-slate-500"
                 >
                   사용자가 없습니다.
@@ -270,13 +321,7 @@ export default function StaffUsersPage({ roleType, title }: Props) {
               </tr>
             ) : (
               pagedRows.map((row, index) => {
-                const summary = getApprovalSummary(row, roleType);
-                const scopeLabel =
-                  summary.requested <= 0
-                    ? roleType === 'managers'
-                      ? '주차장 없음'
-                      : '아니오 구역'
-                    : `${summary.approved}/${summary.requested} 승인`;
+                const scopeLabel = getScopeLabel(row, roleType);
 
                 return (
                   <tr key={row.id} className="border-t">
@@ -287,8 +332,15 @@ export default function StaffUsersPage({ roleType, title }: Props) {
                         index,
                       })}
                     </Td>
-                    <Td>{row.name ?? '-'}</Td>
-                    <Td>{row.email ?? '-'}</Td>
+                    <Td>
+                      <button
+                        type="button"
+                        onClick={() => setSelected(row)}
+                        className="font-medium text-slate-900 underline-offset-2 hover:underline"
+                      >
+                        {row.name ?? '-'}
+                      </button>
+                    </Td>
 
                     {roleType === 'managers' ? (
                       <Td>{row.companyName ?? row.company ?? '-'}</Td>
@@ -307,8 +359,8 @@ export default function StaffUsersPage({ roleType, title }: Props) {
                     ) : null}
 
                     <Td>{row.phone ?? '-'}</Td>
-                    <Td>{row.roles?.join(', ') ?? row.role ?? '-'}</Td>
-                    <Td>{row.status ?? '-'}</Td>
+                    <Td>{getRoleText(row)}</Td>
+                    <Td>{getStatusLabel(row.status)}</Td>
                     <Td>
                       {roleType === 'managers' ? (
                         <button
@@ -318,13 +370,13 @@ export default function StaffUsersPage({ roleType, title }: Props) {
                         >
                           {scopeLabel}
                         </button>
-                      ) : row.is승인 ? (
+                      ) : row.isApproved ? (
                         '예'
                       ) : (
                         '아니오'
                       )}
                     </Td>
-                    <Td>{formatDate(row.approvedAt)}</Td>
+                    <Td>{formatCompactDateTime(row.approvedAt)}</Td>
                   </tr>
                 );
               })
@@ -341,7 +393,7 @@ export default function StaffUsersPage({ roleType, title }: Props) {
           roleType={roleType}
           scopes={getScopes(selected, roleType)}
           actionLoadingId={actionLoadingId}
-          on닫기={() => setSelected(null)}
+          onClose={() => setSelected(null)}
           onReview={(scope, status) => void reviewScope(scope, status)}
         />
       ) : null}
@@ -354,20 +406,22 @@ function ScopeModal({
   roleType,
   scopes,
   actionLoadingId,
-  on닫기,
+  onClose,
   onReview,
 }: {
   row: StaffUser;
   roleType: StaffRole;
   scopes: ApprovalScopeItem[];
   actionLoadingId: string | null;
-  on닫기: () => void;
+  onClose: () => void;
   onReview: (scope: ApprovalScopeItem, status: 'APPROVED' | 'REJECTED') => void;
 }) {
   const title =
     roleType === 'managers'
-      ? `${row.name ?? '-'} Parking Lots`
-      : `${row.name ?? '-'} 구역`;
+      ? `${row.name ?? '-'} 상세정보`
+      : `${row.name ?? '-'} 상세정보`;
+  const scopeTitle = roleType === 'managers' ? '주차장 승인 정보' : '구역 승인 정보';
+  const emptyScopeText = roleType === 'managers' ? '주차장 없음' : '구역 없음';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -375,23 +429,57 @@ function ScopeModal({
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 className="text-xl font-bold text-slate-900">{title}</h2>
-            <p className="text-sm text-slate-500">{row.email ?? '-'}</p>
+            <p className="text-sm text-slate-500">
+              기본 정보와 승인 범위를 확인합니다.
+            </p>
           </div>
 
           <button
             type="button"
-            onClick={on닫기}
+            onClick={onClose}
             className="rounded-xl border px-4 py-2 text-sm hover:bg-slate-50"
           >
             닫기
           </button>
         </div>
 
+        <div className="mt-5 rounded-2xl border bg-slate-50 p-4">
+          <dl className="grid grid-cols-[96px_1fr] gap-x-4 gap-y-3 text-sm md:grid-cols-[96px_1fr_96px_1fr]">
+            <dt className="text-slate-500">이름</dt>
+            <dd className="font-medium text-slate-900">{row.name ?? '-'}</dd>
+
+            <dt className="text-slate-500">이메일</dt>
+            <dd className="text-slate-900">{row.email ?? '-'}</dd>
+
+            <dt className="text-slate-500">전화번호</dt>
+            <dd className="text-slate-900">{row.phone ?? '-'}</dd>
+
+            <dt className="text-slate-500">회사</dt>
+            <dd className="text-slate-900">
+              {row.companyName ?? row.company ?? '-'}
+            </dd>
+
+            <dt className="text-slate-500">역할</dt>
+            <dd className="text-slate-900">{getRoleText(row)}</dd>
+
+            <dt className="text-slate-500">상태</dt>
+            <dd className="text-slate-900">{getStatusLabel(row.status)}</dd>
+
+            <dt className="text-slate-500">승인일시</dt>
+            <dd className="text-slate-900 md:col-span-3">
+              {formatCompactDateTime(row.approvedAt)}
+            </dd>
+          </dl>
+        </div>
+
         <div className="mt-5 overflow-hidden rounded-2xl border">
+          <div className="border-b bg-slate-50 px-5 py-3 text-sm font-semibold text-slate-700">
+            {scopeTitle}
+          </div>
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-left text-slate-500">
               <tr>
-                <Th>SN</Th>
+                <Th>번호</Th>
                 <Th>지역</Th>
                 <Th>주차장</Th>
                 <Th>이름</Th>
@@ -404,7 +492,7 @@ function ScopeModal({
 
             <tbody>
               {scopes.map((scope, index) => {
-                const approved = is승인Scope(scope);
+                const approved = isApprovedScope(scope);
 
                 return (
                   <tr key={scope.id ?? index} className="border-t">
@@ -413,14 +501,17 @@ function ScopeModal({
                     <Td>{scope.parkingLotName ?? scope.lotName ?? '-'}</Td>
                     <Td>
                       {roleType === 'managers'
-                        ? scope.name ?? scope.parkingLotName ?? scope.lotName ?? '-'
+                        ? scope.name ??
+                          scope.parkingLotName ??
+                          scope.lotName ??
+                          '-'
                         : scope.name ??
                           scope.parkingSectionName ??
                           scope.sectionName ??
                           '-'}
                     </Td>
                     <Td>{scope.code ?? '-'}</Td>
-                    <Td>{approved ? '승인' : '대기'}</Td>
+                    <Td>{approved ? '승인' : '승인대기'}</Td>
                     {roleType === 'operators' ? (
                       <Td>{scope.spaces ?? scope.spaceCount ?? '-'}</Td>
                     ) : null}
@@ -462,9 +553,7 @@ function ScopeModal({
                     colSpan={roleType === 'operators' ? 8 : 7}
                     className="px-5 py-10 text-center text-slate-500"
                   >
-                    {roleType === 'managers'
-                      ? '주차장 없음'
-                      : '아니오 구역'}
+                    {emptyScopeText}
                   </td>
                 </tr>
               ) : null}

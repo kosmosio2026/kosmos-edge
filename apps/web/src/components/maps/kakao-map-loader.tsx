@@ -67,7 +67,7 @@ export function useKakaoMapLoader(): KakaoMapLoaderState {
     const script = document.createElement('script');
     script.id = 'kakao-map-sdk';
     script.async = true;
-    script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${appKey}&autoload=false`;
+    script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${appKey}&autoload=false&libraries=services`;
 
     script.onload = () => {
       if (!window.kakao?.maps) {

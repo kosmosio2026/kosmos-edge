@@ -4,6 +4,7 @@ import { ShieldCheck } from 'lucide-react';
 import { UserMenu } from './user-menu';
 import { useRealtime } from '@/components/providers/realtime-provider';
 import type { AuthUser } from '@/types/auth';
+import { APP_VERSION_LABEL } from '@/lib/app-version';
 
 export function HeaderBar({ user }: { user: AuthUser | null }) {
   const { connected, socket } = useRealtime();
@@ -17,7 +18,12 @@ export function HeaderBar({ user }: { user: AuthUser | null }) {
             <ShieldCheck size={18} />
           </div>
           <div>
-            <div className="text-sm font-semibold">Smart Parking Platform</div>
+            <div className="flex items-baseline gap-1.5 text-sm font-semibold">
+              <span>KOSMOS 스마트 주차관제 플랫폼</span>
+              <span className="text-xs font-medium text-muted-foreground">
+                {APP_VERSION_LABEL}
+              </span>
+            </div>
             <div className="text-xs text-muted">
               {user ? `${user.name} · ${user.roles.join(', ')}` : 'Edge-first operations console'}
             </div>

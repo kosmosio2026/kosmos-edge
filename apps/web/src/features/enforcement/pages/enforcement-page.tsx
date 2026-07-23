@@ -18,8 +18,13 @@ type EnforcementItem = {
   isRegistered?: boolean | null;
   plateNumber?: string | null;
   contactNumber?: string | null;
+  amount?: number | null;
+  estimatedFee?: number | null;
   unpaidFee?: number | null;
   violationReason?: string | null;
+  feePolicyId?: string | null;
+  feePolicyName?: string | null;
+  feePolicySource?: 'session' | 'parkingLot' | 'fallback' | string | null;
   parkingSpace?: {
     id?: string | null;
     code?: string | null;
@@ -58,11 +63,17 @@ function formatDate(value?: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
 
-  return date.toLocaleString();
+  return date.toLocaleString('ko-KR', {
+    timeZone: 'Asia/Seoul',
+  });
 }
 
 function formatCurrency(value?: number | null) {
   return `₩${Number(value ?? 0).toLocaleString()}`;
+}
+
+function getEstimatedFee(item: EnforcementItem) {
+  return Number(item.amount ?? item.estimatedFee ?? item.unpaidFee ?? 0);
 }
 
 function formatElapsed(minutes?: number | null) {
@@ -76,20 +87,30 @@ function formatElapsed(minutes?: number | null) {
   return `${hours}h ${rest}m`;
 }
 
+function getParkingSpace(item: EnforcementItem) {
+  const apiItem = item as EnforcementItem & {
+    ParkingSpace?: EnforcementItem['parkingSpace'];
+  };
+
+  return apiItem.parkingSpace ?? apiItem.ParkingSpace ?? null;
+}
+
 function getParkingLotName(item: EnforcementItem) {
+  const space = getParkingSpace(item);
+
   return (
-    item.parkingSpace?.section?.parkingLot?.name ??
-    item.parkingSpace?.section?.parkingLot?.code ??
+    space?.section?.parkingLot?.name ??
+    space?.section?.parkingLot?.code ??
     '-'
   );
 }
 
 function getSectionName(item: EnforcementItem) {
-  return item.parkingSpace?.section?.name ?? '-';
+  return getParkingSpace(item)?.section?.name ?? '-';
 }
 
 function getSpaceCode(item: EnforcementItem) {
-  return item.parkingSpace?.code ?? '-';
+  return getParkingSpace(item)?.code ?? '-';
 }
 
 export default function EnforcementPage({ role = 'admin' }: Props) {
@@ -98,6 +119,7 @@ export default function EnforcementPage({ role = 'admin' }: Props) {
   const [items, setItems] = useState<EnforcementItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [registeringId, setRegisteringId] = useState<string | null>(null);
+  const [selectedDetail, setSelectedDetail] = useState<EnforcementItem | null>(null);
   const [plateNumber, setPlateNumber] = useState<Record<string, string>>({});
   const [contactNumber, setContactNumber] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -122,7 +144,7 @@ export default function EnforcementPage({ role = 'admin' }: Props) {
       setError(
         error instanceof Error
           ? error.message
-          : 'Failed to load enforcement targets.',
+          : '단속 대상을 불러오지 못했습니다.',
       );
     } finally {
       setLoading(false);
@@ -140,7 +162,7 @@ export default function EnforcementPage({ role = 'admin' }: Props) {
     const contact = contactNumber[item.id]?.trim() ?? '';
 
     if (!plate && !contact) {
-      setError('Plate number or contact number is required.');
+      setError('차량번호 또는 연락처를 입력하세요.');
       return;
     }
 
@@ -162,7 +184,7 @@ export default function EnforcementPage({ role = 'admin' }: Props) {
       await load();
     } catch (error) {
       setError(
-        error instanceof Error ? error.message : 'Failed to register session.',
+        error instanceof Error ? error.message : '주차 등록 처리에 실패했습니다.',
       );
     } finally {
       setRegisteringId(null);
@@ -176,7 +198,7 @@ export default function EnforcementPage({ role = 'admin' }: Props) {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">
-            Enforcement
+            단속 관리
           </h1>
           <p className="mt-1 text-sm text-slate-500">
             입차 후 10분이 지나도록 주차 등록이 되지 않은 차량을 확인하고
@@ -189,7 +211,7 @@ export default function EnforcementPage({ role = 'admin' }: Props) {
           onClick={() => void load()}
           className="rounded-2xl border px-4 py-2 text-sm font-medium hover:bg-slate-50"
         >
-          Refresh
+          새로고침
         </button>
       </div>
 
@@ -207,41 +229,38 @@ export default function EnforcementPage({ role = 'admin' }: Props) {
 
       <section className="grid gap-4 md:grid-cols-3">
         <div className="rounded-3xl border bg-white p-5">
-          <div className="text-sm text-slate-500">Unregistered Over 10 Min</div>
+          <div className="text-sm text-slate-500">10분 초과 미등록</div>
           <div className="mt-2 text-3xl font-semibold">{items.length}</div>
         </div>
 
         <div className="rounded-3xl border bg-white p-5">
-          <div className="text-sm text-slate-500">Oldest Target</div>
+          <div className="text-sm text-slate-500">최장 경과 대상</div>
           <div className="mt-2 text-lg font-semibold">
             {oldest ? formatElapsed(oldest.elapsedMinutes) : '-'}
           </div>
         </div>
 
         <div className="rounded-3xl border bg-white p-5">
-          <div className="text-sm text-slate-500">Unpaid Fee Total</div>
+          <div className="text-sm text-slate-500">예상 요금 합계</div>
           <div className="mt-2 text-lg font-semibold">
             {formatCurrency(
-              items.reduce((sum, item) => sum + Number(item.unpaidFee ?? 0), 0),
+              items.reduce((sum, item) => sum + getEstimatedFee(item), 0),
             )}
           </div>
         </div>
       </section>
 
       <section className="overflow-x-auto rounded-3xl border bg-white">
-        <table className="w-full min-w-[1200px] text-left text-sm">
+        <table className="w-full min-w-[1000px] text-left text-sm">
           <thead className="bg-slate-50 text-slate-600">
             <tr>
               <th className="px-4 py-3">번호</th>
-              <th className="px-4 py-3">세션</th>
               <th className="px-4 py-3">주차장</th>
               <th className="px-4 py-3">구역</th>
               <th className="px-4 py-3">주차면</th>
               <th className="px-4 py-3">입차일시</th>
               <th className="px-4 py-3">경과시간</th>
-              <th className="px-4 py-3">차량번호</th>
-              <th className="px-4 py-3">연락처</th>
-              <th className="px-4 py-3">Unpaid Fee</th>
+              <th className="px-4 py-3">예상 요금</th>
               <th className="px-4 py-3">사유</th>
               <th className="px-4 py-3">주차 등록</th>
             </tr>
@@ -250,24 +269,31 @@ export default function EnforcementPage({ role = 'admin' }: Props) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={12} className="px-4 py-8 text-slate-500">
-                  Loading...
+                <td colSpan={9} className="px-4 py-8 text-slate-500">
+                  불러오는 중...
                 </td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
                 <td
-                  colSpan={12}
+                  colSpan={9}
                   className="px-4 py-10 text-center text-slate-500"
                 >
-                  No unregistered vehicles over 10 minutes.
+                  10분 초과 미등록 차량이 없습니다.
                 </td>
               </tr>
             ) : (
               items.map((item, index) => (
                 <tr key={item.id} className="border-t align-top">
-                  <td className="px-4 py-3">{index + 1}</td>
-                  <td className="px-4 py-3">{item.sessionNo ?? item.id}</td>
+                  <td className="px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDetail(item)}
+                      className="font-black text-blue-600 underline-offset-2 hover:underline"
+                    >
+                      {index + 1}
+                    </button>
+                  </td>
                   <td className="px-4 py-3">{getParkingLotName(item)}</td>
                   <td className="px-4 py-3">{getSectionName(item)}</td>
                   <td className="px-4 py-3">{getSpaceCode(item)}</td>
@@ -275,10 +301,8 @@ export default function EnforcementPage({ role = 'admin' }: Props) {
                   <td className="px-4 py-3 font-semibold text-red-600">
                     {formatElapsed(item.elapsedMinutes)}
                   </td>
-                  <td className="px-4 py-3">{item.plateNumber ?? '-'}</td>
-                  <td className="px-4 py-3">{item.contactNumber ?? '-'}</td>
                   <td className="px-4 py-3">
-                    {formatCurrency(item.unpaidFee)}
+                    {formatCurrency(getEstimatedFee(item))}
                   </td>
                   <td className="px-4 py-3">
                     <span className="rounded-full bg-red-50 px-2 py-1 text-xs font-medium text-red-700">
@@ -305,6 +329,54 @@ export default function EnforcementPage({ role = 'admin' }: Props) {
           </tbody>
         </table>
       </section>
+
+      {selectedDetail ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+          <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-black text-slate-900">단속 대상 상세</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  세션과 주차 위치, 예상 요금 정보를 확인합니다.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedDetail(null)}
+                className="rounded-xl border px-3 py-2 text-sm font-bold hover:bg-slate-50"
+              >
+                닫기
+              </button>
+            </div>
+
+            <div className="mt-6 grid gap-3 text-sm md:grid-cols-2">
+              {[
+                ['세션 번호', selectedDetail.sessionNo ?? selectedDetail.id],
+                ['상태', selectedDetail.status ?? '-'],
+                ['주차장', getParkingLotName(selectedDetail)],
+                ['구역', getSectionName(selectedDetail)],
+                ['주차면', getSpaceCode(selectedDetail)],
+                ['입차일시', formatDate(selectedDetail.entryTime)],
+                ['경과시간', formatElapsed(selectedDetail.elapsedMinutes)],
+                ['예상 요금', formatCurrency(getEstimatedFee(selectedDetail))],
+                [
+                  '적용 요금정책',
+                  selectedDetail.feePolicyName
+                    ? `${selectedDetail.feePolicyName} (${selectedDetail.feePolicySource ?? '-'})`
+                    : '요금정책 없음',
+                ],
+                ['사유', selectedDetail.violationReason ?? 'UNREGISTERED'],
+                ['등록 여부', selectedDetail.isRegistered ? '등록됨' : '미등록'],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-2xl border bg-slate-50 p-4">
+                  <div className="text-xs font-black text-slate-400">{label}</div>
+                  <div className="mt-1 break-all font-bold text-slate-900">{value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { ParkingLotOperationSnapshotPublisherService } from '../common/parking-lot-operation-snapshot-publisher.service';
 import { CreateSectionDto } from './dto/create-section.dto';
 import { UpdateSectionDto } from './dto/update-section.dto';
 import { SectionListQueryDto } from './queries/section-list-query.dto';
@@ -18,7 +19,11 @@ import {
 
 @Injectable()
 export class SectionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly snapshotPublisher:
+      ParkingLotOperationSnapshotPublisherService,
+  ) {}
 
   private async getScope(user?: AuthUser) {
     if (!user?.sub || isAdmin(user)) return null;
@@ -116,32 +121,101 @@ export class SectionsService {
     return item;
   }
 
-  create(dto: CreateSectionDto) {
-    return this.prisma.parkingSection.create({
-      data: {
-        parkingLotId: dto.parkingLotId,
-        name: dto.name,
-        code: dto.code,
-        isActive: dto.isActive ?? true,
-      },
+  async create(dto: CreateSectionDto) {
+    return this.prisma.$transaction(async (tx) => {
+      const created =
+        await tx.parkingSection.create({
+          data: {
+            parkingLotId: dto.parkingLotId,
+            name: dto.name,
+            code: dto.code,
+            isActive: dto.isActive ?? true,
+          },
+        });
+
+      await this.snapshotPublisher
+        .publishForParkingLot(
+          created.parkingLotId,
+          tx,
+        );
+
+      return created;
     });
   }
 
-  update(id: string, dto: UpdateSectionDto) {
-    return this.prisma.parkingSection.update({
-      where: { id },
-      data: {
-        parkingLotId: dto.parkingLotId,
-        name: dto.name,
-        code: dto.code,
-        isActive: dto.isActive,
-      },
+  async update(
+    id: string,
+    dto: UpdateSectionDto,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const existing =
+        await tx.parkingSection.findUnique({
+          where: { id },
+        });
+
+      if (!existing) {
+        throw new NotFoundException(
+          'Parking section not found',
+        );
+      }
+
+      const updated =
+        await tx.parkingSection.update({
+          where: { id },
+          data: {
+            parkingLotId: dto.parkingLotId,
+            name: dto.name,
+            code: dto.code,
+            isActive: dto.isActive,
+          },
+        });
+
+      if (
+        existing.parkingLotId !==
+        updated.parkingLotId
+      ) {
+        await this.snapshotPublisher
+          .publishForParkingLot(
+            existing.parkingLotId,
+            tx,
+          );
+      }
+
+      await this.snapshotPublisher
+        .publishForParkingLot(
+          updated.parkingLotId,
+          tx,
+        );
+
+      return updated;
     });
   }
 
-  remove(id: string) {
-    return this.prisma.parkingSection.delete({
-      where: { id },
+  async remove(id: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const existing =
+        await tx.parkingSection.findUnique({
+          where: { id },
+        });
+
+      if (!existing) {
+        throw new NotFoundException(
+          'Parking section not found',
+        );
+      }
+
+      const removed =
+        await tx.parkingSection.delete({
+          where: { id },
+        });
+
+      await this.snapshotPublisher
+        .publishForParkingLot(
+          existing.parkingLotId,
+          tx,
+        );
+
+      return removed;
     });
   }
 }

@@ -37,6 +37,7 @@ type ParkingLotItem = {
 
 function getParkingLotRegisterHref(qrToken: string, returnTo: string) {
   const params = new URLSearchParams();
+        params.set('operationMode', 'SENSOR');
   params.set('qrToken', qrToken);
 
   if (returnTo) {
@@ -69,7 +70,7 @@ export default function MobileParkingLotPickerPage({ returnTo = '' }: Props) {
       setMessage('');
 
       try {
-        const res = await fetch(`${API_BASE}/public/parking-lots/regions`, {
+        const res = await fetch(`${API_BASE}/public/parking-lots/regions?operationMode=SENSOR`, {
           cache: 'no-store',
         });
         const json = await res.json();

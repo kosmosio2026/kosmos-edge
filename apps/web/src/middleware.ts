@@ -45,6 +45,15 @@ function getLoginPath(pathname: string) {
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  if (pathname === '/api/operator/sensor-event') {
+    return new NextResponse(null, {
+      status: 404,
+      headers: {
+        'Cache-Control': 'no-store',
+      },
+    });
+  }
+
   if (isStaticAsset(pathname) || isPublicPath(pathname)) {
     return NextResponse.next();
   }
@@ -73,6 +82,7 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico).*)',
+    '/api/operator/sensor-event',
+    '/((?!api(?:/|$)|_next/static|_next/image|favicon.ico).*)',
   ],
 };

@@ -162,6 +162,88 @@ function formatDeviceStatus(value?: string | null) {
   return labels[value] ?? value;
 }
 
+
+function getSensorParkingSpace(sensor: any) {
+  return sensor?.parkingSpace ?? sensor?.ParkingSpace ?? null;
+}
+
+function getSensorParkingSpaceCode(sensor: any) {
+  const space = getSensorParkingSpace(sensor);
+return (
+    sensor?.parkingSpaceCode ??
+    sensor?.spaceCode ??
+    space?.code ??
+    space?.number ??
+    '-'
+  );
+}
+
+function getSensorParkingLotName(sensor: any) {
+  const space = getSensorParkingSpace(sensor);
+
+  return (
+    sensor?.parkingLotName ??
+    space?.section?.parkingLot?.name ??
+    space?.Section?.ParkingLot?.name ??
+    '-'
+  );
+}
+
+function getSensorSectionName(sensor: any) {
+  const space = getSensorParkingSpace(sensor);
+
+  return (
+    sensor?.parkingSectionName ??
+    sensor?.sectionName ??
+    space?.section?.name ??
+    space?.Section?.name ??
+    '-'
+  );
+}
+
+function getSensorFirmwareVersion(sensor: any) {
+  const firmware =
+    sensor?.firmwareVersion ??
+    sensor?.latestTelemetry?.firmwareVersion ??
+    sensor?.latestTelemetry?.firmware_version;
+
+  return firmware === null || firmware === undefined || firmware === ''
+    ? '-'
+    : String(firmware);
+}
+
+function getSensorLastSeenAt(sensor: any) {
+  return (
+    sensor?.lastSeenAt ??
+    sensor?.latestState?.lastMessageTime ??
+    sensor?.latestState?.last_message_time ??
+    sensor?.latestTelemetry?.time ??
+    sensor?.latestTelemetry?.lastMessageTime ??
+    null
+  );
+}
+
+function formatSensorDateTime(value: unknown) {
+  if (!value) return '-';
+
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return String(value);
+
+  return date.toLocaleString('ko-KR', {
+    timeZone: 'Asia/Seoul',
+  });
+}
+
+
+function getSensorOptionLabel(sensor: SensorDevice) {
+  const devEui = sensor.devEui ?? '-';
+  const type = sensor.type ?? 'PARKING_SENSOR';
+  const name = sensor.name ?? '이름 없음';
+  const serial = sensor.serialNumber ?? '-';
+
+  return `${devEui} · ${type} · ${name} · ${serial}`;
+}
+
 export default function SpacesPage({ role = 'admin' }: Props) {
   const searchParams = useSearchParams();
   const selectedParkingLotId = searchParams.get('parkingLotId') ?? '';
@@ -188,12 +270,14 @@ export default function SpacesPage({ role = 'admin' }: Props) {
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<ParkingSpaceItem | null>(null);
+  const [selectedSpace, setSelectedSpace] = useState<ParkingSpaceItem | null>(null);
   const [form, setForm] = useState<SpaceForm>(emptyForm());
 
   const [sensorModalOpen, setSensorModalOpen] = useState(false);
   const [sensorTargetSpace, setSensorTargetSpace] =
     useState<ParkingSpaceItem | null>(null);
   const [sensorForm, setSensorForm] = useState<SensorForm>(emptySensorForm());
+  const [sensorOptions, setSensorOptions] = useState<SensorDevice[]>([]);
 
   const [sensorDetailOpen, setSensorDetailOpen] = useState(false);
   const [sensorDetail, setSensorDetail] = useState<SensorDevice | null>(null);
@@ -406,18 +490,56 @@ export default function SpacesPage({ role = 'admin' }: Props) {
     setFormOpen(true);
   }
 
+  async function loadSensorOptions(targetSpace?: ParkingSpaceItem | null) {
+    if (!session?.accessToken) return;
+
+    try {
+      const result = await apiFetch('/devices/sensors?type=PARKING_SENSOR', {
+        accessToken: session.accessToken,
+      });
+
+      const devices = unwrapItems<SensorDevice>(result);
+
+      const available = devices
+        .filter((device) => (device.type ?? 'PARKING_SENSOR') === 'PARKING_SENSOR')
+        .filter((device) => Boolean(device.devEui))
+        .filter(
+          (device) =>
+            !device.parkingSpaceId ||
+            Boolean(targetSpace?.id && device.parkingSpaceId === targetSpace.id),
+        )
+        .sort((a, b) =>
+          String(a.devEui ?? '').localeCompare(String(b.devEui ?? '')),
+        );
+
+      setSensorOptions(available);
+    } catch (error) {
+      setSensorOptions([]);
+      setError(
+        error instanceof Error
+          ? error.message
+          : '등록된 센서 목록을 불러오지 못했습니다.',
+      );
+    }
+  }
+
   function openSensorModal(item: ParkingSpaceItem) {
     if (!canManage) return;
 
+    const currentSensor = getSensorDevice(item);
+
     setSensorTargetSpace(item);
     setSensorForm({
-      type: 'PARKING_SENSOR',
-      devEui: '',
-      serialNumber: item.code ? `SENSOR-${item.code}` : '',
+      type: currentSensor?.type ?? 'PARKING_SENSOR',
+      devEui: currentSensor?.devEui ?? '',
+      serialNumber: currentSensor?.serialNumber ?? '',
     });
+    setSensorOptions([]);
     setSensorModalOpen(true);
     setError(null);
+    void loadSensorOptions(item);
   }
+
 
   function openSensorDetailModal(sensorDevice: SensorDevice) {
     setSensorDetail(sensorDevice);
@@ -490,7 +612,7 @@ export default function SpacesPage({ role = 'admin' }: Props) {
     const devEui = sensorForm.devEui.trim().toLowerCase();
 
     if (!devEui) {
-      setError('DevEUI is required.');
+      setError('DevEUI를 선택하거나 입력해 주세요.');
       return;
     }
 
@@ -498,52 +620,27 @@ export default function SpacesPage({ role = 'admin' }: Props) {
     setError(null);
 
     const payload = {
-      type: sensorForm.type,
       devEui,
-      serialNumber: sensorForm.serialNumber.trim() || `SENSOR-${devEui}`,
-      name: sensorTargetSpace.code
-        ? `Sensor ${sensorTargetSpace.code}`
-        : `Sensor ${devEui}`,
       parkingSpaceId: sensorTargetSpace.id,
     };
 
     try {
-      try {
-        await apiFetch('/devices/sensors', {
-          method: 'POST',
-          accessToken: session.accessToken,
-          body: JSON.stringify(payload),
-        });
-      } catch (error) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : 'Failed to register sensor device.';
-
-        const shouldReplace = window.confirm(
-          `${message}\n\nDo you want to replace the existing sensor mapping for this parking space?`,
-        );
-
-        if (!shouldReplace) {
-          throw error;
-        }
-
-        await apiFetch('/devices/sensors/replace', {
-          method: 'POST',
-          accessToken: session.accessToken,
-          body: JSON.stringify(payload),
-        });
-      }
+      await apiFetch('/devices/link-sensor-to-space', {
+        method: 'POST',
+        accessToken: session.accessToken,
+        body: JSON.stringify(payload),
+      });
 
       setSensorModalOpen(false);
       setSensorTargetSpace(null);
       setSensorForm(emptySensorForm());
+      setSensorOptions([]);
       await load();
     } catch (error) {
       setError(
         error instanceof Error
           ? error.message
-          : 'Failed to register sensor device.',
+          : '센서 매핑에 실패했습니다.',
       );
     } finally {
       setSaving(false);
@@ -599,6 +696,38 @@ export default function SpacesPage({ role = 'admin' }: Props) {
       null
     );
   }
+
+  async function removeSensorMapping(sensor: any) {
+    if (!session?.accessToken || !sensor?.id) return;
+
+    const label = sensor.devEui ?? sensor.serialNumber ?? sensor.name ?? '선택한 센서';
+
+    if (!confirm(`${label} 센서의 주차면 매핑을 제거하시겠습니까?`)) {
+      return;
+    }
+
+    setError(null);
+
+    try {
+      await apiFetch(`/devices/sensors/${sensor.id}/map-space`, {
+        method: 'PATCH',
+        accessToken: session.accessToken,
+        body: JSON.stringify({
+          parkingSpaceId: null,
+        }),
+      });
+
+      setSensorDetail(null);
+      await load();
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : '센서 매핑 제거에 실패했습니다.',
+      );
+    }
+  }
+
 
   return (
     <main className="space-y-6 p-6">
@@ -658,21 +787,20 @@ export default function SpacesPage({ role = 'admin' }: Props) {
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-2xl border bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-left">
+      <div className="overflow-x-auto rounded-2xl border bg-white">
+        <table className="w-full min-w-[1080px] text-xs">
+          <thead className="bg-slate-50 text-left text-xs text-slate-600">
             <tr>
-              <th className="px-5 py-3">번호</th>
-              <th className="px-5 py-3">지역</th>
-              <th className="px-5 py-3">주차장</th>
-              <th className="px-5 py-3">구역</th>
-              <th className="px-5 py-3">코드</th>
-              <th className="px-5 py-3">유형</th>
-              <th className="px-5 py-3">센서 장치</th>
-              <th className="px-5 py-3">장치 상태</th>
-              <th className="px-5 py-3">주차면 상태</th>
+              <th className="whitespace-nowrap px-3 py-2">번호</th>
+              <th className="whitespace-nowrap px-3 py-2">주차장</th>
+              <th className="whitespace-nowrap px-3 py-2">구역</th>
+              <th className="whitespace-nowrap px-3 py-2">코드</th>
+              <th className="whitespace-nowrap px-3 py-2">유형</th>
+              <th className="whitespace-nowrap px-3 py-2">주차 상태</th>
+              <th className="whitespace-nowrap px-3 py-2">장치 상태</th>
+              <th className="whitespace-nowrap px-3 py-2">센서</th>
               {canManage ? (
-                <th className="px-5 py-3 text-right">관리</th>
+                <th className="whitespace-nowrap px-3 py-2 text-right">관리</th>
               ) : null}
             </tr>
           </thead>
@@ -685,46 +813,65 @@ export default function SpacesPage({ role = 'admin' }: Props) {
 
               return (
                 <tr key={item.id} className="border-t">
-                  <td className="px-5 py-3">
+                  <td className="whitespace-nowrap px-3 py-2 text-xs">
                     {getRowNumber({
                       page: meta.page,
                       pageSize: meta.pageSize,
                       index,
                     })}
                   </td>
-                  <td className="px-5 py-3">{lot?.region ?? '-'}</td>
-                  <td className="px-5 py-3">{lot?.name ?? '-'}</td>
-                  <td className="px-5 py-3">{section?.name ?? '-'}</td>
-                  <td className="px-5 py-3 font-medium">{item.code ?? '-'}</td>
-                  <td className="px-5 py-3">{formatSpaceType(item.type)}</td>
-                  <td className="px-5 py-3">
+                  <td className="whitespace-nowrap px-3 py-2 text-xs">{lot?.name ?? '-'}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-xs">{section?.name ?? '-'}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-xs font-medium">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSpace(item)}
+                      className="font-semibold text-slate-900 underline-offset-2 hover:underline"
+                    >
+                      {item.code ?? '-'}
+                    </button>
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 text-xs">{formatSpaceType(item.type)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-xs">{formatSpaceStatus(item.status)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-xs">{formatDeviceStatus(sensorDevice?.status)}</td>
+                  <td className="whitespace-nowrap px-3 py-2 text-xs">
                     {sensorDevice ? (
-                      <button
-                        type="button"
-                        onClick={() => openSensorDetailModal(sensorDevice)}
-                        className="text-left font-medium text-blue-600 hover:underline"
-                      >
-                        {sensorDevice.devEui ??
-                          sensorDevice.serialNumber ??
-                          sensorDevice.name ??
-                          '-'}
-                      </button>
+                      <div className="flex items-center gap-2 whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => openSensorDetailModal(sensorDevice)}
+                          className="text-left font-mono text-[10px] font-semibold text-blue-600 hover:underline"
+                        >
+                          {sensorDevice.devEui ??
+                            sensorDevice.serialNumber ??
+                            sensorDevice.name ??
+                            '-'}
+                        </button>
+
+                        {canManage ? (
+                          <button
+                            type="button"
+                            onClick={() => openSensorModal(item)}
+                            className="rounded-lg border px-2 py-0.5 text-[10px] font-semibold text-slate-500 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
+                          >
+                            매핑 수정
+                          </button>
+                        ) : null}
+                      </div>
                     ) : canManage ? (
                       <button
                         type="button"
                         onClick={() => openSensorModal(item)}
                         className="font-medium text-blue-600 hover:underline"
                       >
-                        센서 장치 추가
+                        센서 매핑
                       </button>
                     ) : (
                       '-'
                     )}
                   </td>
-                  <td className="px-5 py-3">{formatDeviceStatus(sensorDevice?.status)}</td>
-                  <td className="px-5 py-3">{formatSpaceStatus(item.status)}</td>
                   {canManage ? (
-                    <td className="px-5 py-3">
+                    <td className="whitespace-nowrap px-3 py-2 text-xs">
                       <div className="flex justify-end gap-2">
                         <button
                           type="button"
@@ -752,8 +899,8 @@ export default function SpacesPage({ role = 'admin' }: Props) {
             {!loading && filteredItems.length === 0 ? (
               <tr>
                 <td
-                  colSpan={canManage ? 10 : 9}
-                  className="px-5 py-10 text-center text-slate-500"
+                  colSpan={canManage ? 9 : 8}
+                  className="whitespace-nowrap px-5 py-10 text-center text-slate-500"
                 >
                   등록된 주차면이 없습니다.
                 </td>
@@ -764,6 +911,16 @@ export default function SpacesPage({ role = 'admin' }: Props) {
       </div>
 
       <PaginationBar meta={meta} />
+
+      {selectedSpace ? (
+        <SpaceDetailModal
+          space={selectedSpace}
+          section={getSection(selectedSpace)}
+          lot={getLotForSection(getSection(selectedSpace))}
+          sensor={getSensorDevice(selectedSpace)}
+          onClose={() => setSelectedSpace(null)}
+        />
+      ) : null}
 
       {formOpen && canManage ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -935,38 +1092,41 @@ export default function SpacesPage({ role = 'admin' }: Props) {
             className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl"
           >
             <div className="mb-5">
-              <h2 className="text-lg font-bold">센서 장치 등록</h2>
+              <h2 className="text-lg font-bold">센서 매핑</h2>
               <p className="text-sm text-slate-500">
                 주차면: {sensorTargetSpace?.code ?? '-'}
               </p>
             </div>
-
             <div className="space-y-4">
               <label className="block">
                 <span className="text-sm font-medium text-slate-700">
-                  센서 유형
+                  등록된 센서 선택
                 </span>
                 <select
-                  value={sensorForm.type}
+                  value={sensorForm.devEui}
                   onChange={(event) =>
                     setSensorForm((prev) => ({
                       ...prev,
-                      type: event.target.value,
+                      devEui: event.target.value,
                     }))
                   }
                   className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:border-blue-500"
                 >
-                  <option value="PARKING_SENSOR">PARKING_SENSOR</option>
-                  <option value="SENSIO_CONTROLLER">SENSIO_CONTROLLER</option>
-                  <option value="IO_CONTROLLER">IO_CONTROLLER</option>
-                  <option value="DISPLAY_BOARD">DISPLAY_BOARD</option>
-                  <option value="SMART_TRACKER">SMART_TRACKER</option>
+                  <option value="">센서 선택</option>
+                  {sensorOptions.map((sensor) => (
+                    <option key={sensor.id} value={sensor.devEui ?? ''}>
+                      {getSensorOptionLabel(sensor)}
+                    </option>
+                  ))}
                 </select>
+                <p className="mt-1 text-xs text-slate-500">
+                  미매핑 주차감지센서만 표시됩니다. 목록에 없으면 DevEUI를 직접 입력하세요.
+                </p>
               </label>
 
               <label className="block">
                 <span className="text-sm font-medium text-slate-700">
-                  DevEUI
+                  DevEUI 직접 입력
                 </span>
                 <input
                   value={sensorForm.devEui}
@@ -981,23 +1141,13 @@ export default function SpacesPage({ role = 'admin' }: Props) {
                 />
               </label>
 
-              <label className="block">
-                <span className="text-sm font-medium text-slate-700">
-                  시리얼 번호
-                </span>
-                <input
-                  value={sensorForm.serialNumber}
-                  onChange={(event) =>
-                    setSensorForm((prev) => ({
-                      ...prev,
-                      serialNumber: event.target.value,
-                    }))
-                  }
-                  placeholder="예: SENSOR-A-001"
-                  className="mt-1 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:border-blue-500"
-                />
-              </label>
+              {sensorOptions.length === 0 ? (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700">
+                  선택 가능한 미매핑 센서가 없습니다. 이미 등록된 센서의 DevEUI를 알고 있다면 직접 입력해 매핑할 수 있습니다.
+                </div>
+              ) : null}
             </div>
+
 
             <div className="mt-6 flex justify-end gap-2">
               <button
@@ -1006,6 +1156,7 @@ export default function SpacesPage({ role = 'admin' }: Props) {
                   setSensorModalOpen(false);
                   setSensorTargetSpace(null);
                   setSensorForm(emptySensorForm());
+                  setSensorOptions([]);
                 }}
                 className="rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-slate-50"
               >
@@ -1017,7 +1168,7 @@ export default function SpacesPage({ role = 'admin' }: Props) {
                 disabled={saving}
                 className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
               >
-                {saving ? '등록 중...' : '센서 등록'}
+                {saving ? '매핑 중...' : '센서 매핑'}
               </button>
             </div>
           </form>
@@ -1028,41 +1179,38 @@ export default function SpacesPage({ role = 'admin' }: Props) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
             <div className="mb-5">
-              <h2 className="text-lg font-bold">센서 장치 상세s</h2>
+              <h2 className="text-lg font-bold">센서 상세정보</h2>
               <p className="text-sm text-slate-500">
                 {sensorDetail.devEui ?? sensorDetail.serialNumber ?? '-'}
               </p>
             </div>
 
             <div className="space-y-3 text-sm">
-              <DetailRow label="Name" value={sensorDetail.name} />
+              <DetailRow label="센서명" value={sensorDetail.name} />
               <DetailRow label="유형" value={sensorDetail.type} />
               <DetailRow label="시리얼 번호" value={sensorDetail.serialNumber} />
-              <DetailRow label="DevEUI" value={sensorDetail.devEui} />
+              <DetailRow label="DevEUI" value={sensorDetail.devEui} valueClassName="font-mono text-[10px]" />
               <DetailRow label="상태" value={sensorDetail.status} />
-              <DetailRow
-                label="주차면 ID"
-                value={sensorDetail.parkingSpaceId}
-              />
-              <DetailRow
-                label="주차장 ID"
-                value={sensorDetail.parkingLotId}
-              />
-              <DetailRow
-                label="Parking 구역 ID"
-                value={sensorDetail.parking구역Id}
-              />
-              <DetailRow
-                label="펌웨어 버전"
-                value={sensorDetail.firmwareVersion}
-              />
-              <DetailRow
-                label="최근 수신"
-                value={formatDate(sensorDetail.lastSeenAt)}
-              />
+              <DetailRow label="주차면 기호" value={getSensorParkingSpaceCode(sensorDetail)} />
+              <DetailRow label="주차장명" value={getSensorParkingLotName(sensorDetail)} />
+              <DetailRow label="주차구역" value={getSensorSectionName(sensorDetail)} />
+              <DetailRow label="펌웨어 버전" value={getSensorFirmwareVersion(sensorDetail)} />
+              <DetailRow label="최근 수신 시간" value={formatSensorDateTime(getSensorLastSeenAt(sensorDetail))} />
             </div>
 
-            <div className="mt-6 flex justify-end">
+            <div className="mt-6 flex items-center justify-between gap-3">
+              {canManage && sensorDetail.parkingSpaceId ? (
+                <button
+                  type="button"
+                  onClick={() => void removeSensorMapping(sensorDetail)}
+                  className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100"
+                >
+                  센서 매핑 제거
+                </button>
+              ) : (
+                <span />
+              )}
+
               <button
                 type="button"
                 onClick={() => {
@@ -1085,17 +1233,89 @@ function getSensorDevice(item: ParkingSpaceItem): SensorDevice | null {
   return item.sensorDevice ?? item.device ?? item.sensor ?? null;
 }
 
+function SpaceDetailModal({
+  space,
+  section,
+  lot,
+  sensor,
+  onClose,
+}: {
+  space: ParkingSpaceItem;
+  section: Parking구역 | null;
+  lot: ParkingLot | null;
+  sensor: SensorDevice | null;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">주차면 상세정보</h2>
+            <p className="mt-1 text-sm text-slate-500">{space.code ?? '-'}</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border px-3 py-1 text-sm hover:bg-slate-50"
+          >
+            닫기
+          </button>
+        </div>
+
+        <div className="space-y-3 text-sm">
+          <DetailRow label="코드" value={space.code ?? '-'} />
+          <DetailRow label="지역" value={lot?.region ?? '-'} />
+          <DetailRow label="시군구" value={lot?.district ?? '-'} />
+          <DetailRow label="주차장" value={lot?.name ?? '-'} />
+          <DetailRow label="주차장 코드" value={lot?.code ?? '-'} />
+          <DetailRow label="구역" value={section?.name ?? '-'} />
+          <DetailRow label="구역 코드" value={section?.code ?? '-'} />
+          <DetailRow label="유형" value={formatSpaceType(space.type)} />
+          <DetailRow label="주차 상태" value={formatSpaceStatus(space.status)} />
+          <DetailRow label="센서명" value={sensor?.name ?? '-'} />
+          <DetailRow
+            label="DevEUI"
+            value={sensor?.devEui ?? '-'}
+            valueClassName="font-mono text-[10px]"
+          />
+          <DetailRow label="센서 일련번호" value={sensor?.serialNumber ?? '-'} />
+          <DetailRow label="장치 상태" value={formatDeviceStatus(sensor?.status)} />
+          <DetailRow label="펌웨어 버전" value={getSensorFirmwareVersion(sensor)} />
+          <DetailRow
+            label="최근 수신 시간"
+            value={formatSensorDateTime(getSensorLastSeenAt(sensor))}
+          />
+        </div>
+
+        <div className="mt-6 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+          >
+            확인
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DetailRow({
   label,
   value,
+  valueClassName = '',
 }: {
   label: string;
   value?: string | null;
+  valueClassName?: string;
 }) {
   return (
     <div className="flex justify-between gap-4 border-b pb-2">
       <span className="text-slate-500">{label}</span>
-      <span className="text-right font-medium text-slate-900">
+      <span className={`text-right font-medium text-slate-900 ${valueClassName}`}>
         {value ?? '-'}
       </span>
     </div>

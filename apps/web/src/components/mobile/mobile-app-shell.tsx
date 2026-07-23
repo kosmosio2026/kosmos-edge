@@ -1,5 +1,6 @@
 'use client';
 
+import { APP_VERSION } from '@/lib/app-version';
 import { usePathname } from 'next/navigation';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 
@@ -162,8 +163,11 @@ export function MobileAppShell({
                   <a href="/mobile/member/profile" className={menuLinkClassName()}>
                     내 정보
                   </a>
+                  <a href="/mobile/member/password-reset" className={menuLinkClassName()}>
+                    비밀번호 변경
+                  </a>
                   <a href="/mobile/payments" className={menuLinkClassName('primary')}>
-                    요금 결제
+                    청구서
                   </a>
                   <a href="/mobile/member/history" className={menuLinkClassName()}>
                     주차 이력
@@ -180,7 +184,7 @@ export function MobileAppShell({
                     주차 이력
                   </a>
                   <a href="/mobile/payments" className={menuLinkClassName()}>
-                    요금 결제
+                    청구서
                   </a>
                   <button type="button" onClick={logoutVisitor} className={menuLinkClassName('danger')}>
                     로그아웃
@@ -216,6 +220,10 @@ export function MobileAppShell({
           data-kosmos-mobile-legal-footer
           className="mt-5 rounded-[1.5rem] bg-white/90 p-4 text-center text-[11px] font-bold leading-5 text-slate-400 shadow-xl"
         >
+          <p className="mb-2 text-[11px] font-semibold tracking-wide text-slate-400">
+            KOSMOS SMART PARKING {APP_VERSION}
+          </p>
+
           <div
             className="flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs text-slate-500"
             data-kosmos-legal-links
@@ -232,8 +240,8 @@ export function MobileAppShell({
             data-kosmos-company-info
           >
             <p>© 2026 KOSMOS Co., Ltd. All rights reserved.</p>
-            <p>코스모스 주식회사 · 사업자등록번호: 507-81-17904 · 대표자: 윤도영</p>
-            <p>주소: 전라남도 화순군 화순읍 홍문길 4</p>
+            <p>코스모스 주식회사 · 주소: 전라남도 화순군 화순읍 홍문길 4</p>
+            <p>사업자등록번호: 507-81-17904 · 대표자: 윤도영</p>
             <p>대표번호: 010-2983-1136 · 이메일: admin@kosmos.io.kr</p>
           </div>
         </footer>

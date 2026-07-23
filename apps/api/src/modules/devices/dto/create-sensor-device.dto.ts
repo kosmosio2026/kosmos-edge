@@ -26,5 +26,21 @@ export class CreateSensorDeviceDto {
 
   @IsOptional()
   @IsString()
+  macAddress?: string;
+
+  @IsOptional()
+  @IsString()
+  ipAddress?: string;
+
+  @IsOptional()
+  @IsString()
+  installLocation?: string;
+
+  @IsOptional()
+  @IsEnum(DeviceStatus)
+  status?: DeviceStatus;
+
+  @IsOptional()
+  @IsString()
   parkingSpaceId?: string;
 }

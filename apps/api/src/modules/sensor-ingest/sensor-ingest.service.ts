@@ -1,4 +1,10 @@
 import {
+  isCloudMode as isNormalizedCloudMode,
+  getAppProfile,
+  isConnectedEdgeProfile,
+  isEdgeStandaloneProfile,
+} from '../../common/config/app-mode';
+import {
   BadRequestException,
   Injectable,
   NotFoundException,
@@ -224,9 +230,7 @@ export class SensorIngestService {
           paymentGraceExpired: false,
           paymentGraceExpiredAt: null,
           additionalFeeRequired: false,
-          invoiceCreationMode: this.isCloudMode()
-            ? 'CLOUD_IMMEDIATE'
-            : 'EDGE_SYNC_REQUIRED',
+          invoiceCreationMode: this.getInvoiceCreationMode(),
         } as any,
         events: {
           create: {
@@ -344,11 +348,9 @@ export class SensorIngestService {
       exitedUnpaid: paymentDecision.exitedUnpaid,
       paymentReason: paymentDecision.paymentReason,
       additionalFeeRequired,
-      invoiceCreationMode: this.isCloudMode()
-        ? 'CLOUD_IMMEDIATE'
-        : 'EDGE_SYNC_REQUIRED',
+      invoiceCreationMode: this.getInvoiceCreationMode(),
       invoiceCreatedAtEdge: false,
-      invoiceSyncRequired: paymentRequired && !this.isCloudMode(),
+      invoiceSyncRequired: paymentRequired && this.shouldSyncInvoiceToCloud(),
     };
 
     const nextStatus = 'CLOSED';
@@ -387,9 +389,7 @@ export class SensorIngestService {
               exitedUnpaid: paymentDecision.exitedUnpaid,
               paymentReason: paymentDecision.paymentReason,
               additionalFeeRequired,
-              invoiceCreationMode: this.isCloudMode()
-                ? 'CLOUD_IMMEDIATE'
-                : 'EDGE_SYNC_REQUIRED',
+              invoiceCreationMode: this.getInvoiceCreationMode(),
             } as any,
           },
         },
@@ -399,7 +399,10 @@ export class SensorIngestService {
     let invoicePayload: Record<string, unknown> | null = null;
     let invoiceCreationSkippedForEdge = false;
 
-    if (paymentRequired && this.isCloudMode()) {
+    if (
+      paymentRequired &&
+      this.shouldCreateInvoiceLocally()
+    ) {
       try {
         const { invoice, calculation } =
           await this.invoicesService.ensureInvoiceForSession({
@@ -523,7 +526,10 @@ export class SensorIngestService {
       }
     }
 
-    if (paymentRequired && !this.isCloudMode()) {
+    if (
+      paymentRequired &&
+      this.shouldSyncInvoiceToCloud()
+    ) {
       invoiceCreationSkippedForEdge = true;
 
       await this.prisma.parkingSessionEvent.create({
@@ -595,7 +601,7 @@ export class SensorIngestService {
         invoice: invoicePayload,
         invoiceCreated: invoicePayload != null,
         invoiceCreationSkippedForEdge,
-        syncRequired: paymentRequired && !this.isCloudMode(),
+        syncRequired: paymentRequired && this.shouldSyncInvoiceToCloud(),
       },
       occurredAt: input.occurredAt,
     });
@@ -617,7 +623,7 @@ export class SensorIngestService {
       invoice: invoicePayload,
       invoiceCreated: invoicePayload != null,
       invoiceCreationSkippedForEdge,
-      syncRequired: paymentRequired && !this.isCloudMode(),
+      syncRequired: paymentRequired && this.shouldSyncInvoiceToCloud(),
     };
   }
 
@@ -682,15 +688,34 @@ export class SensorIngestService {
   }
 
   private getAppMode() {
-    return (
-      process.env.APP_PROFILE ??
-      process.env.APP_MODE ??
-      'cloud'
-    ).toLowerCase();
+    return getAppProfile();
   }
 
   private isCloudMode() {
-    return this.getAppMode() === 'cloud';
+    return isNormalizedCloudMode();
+  }
+
+  private shouldCreateInvoiceLocally() {
+    return (
+      this.isCloudMode() ||
+      isEdgeStandaloneProfile()
+    );
+  }
+
+  private shouldSyncInvoiceToCloud() {
+    return isConnectedEdgeProfile();
+  }
+
+  private getInvoiceCreationMode() {
+    if (isConnectedEdgeProfile()) {
+      return 'EDGE_SYNC_REQUIRED';
+    }
+
+    if (isEdgeStandaloneProfile()) {
+      return 'EDGE_STANDALONE_IMMEDIATE';
+    }
+
+    return 'CLOUD_IMMEDIATE';
   }
 
   private normalizeParkingStatus(

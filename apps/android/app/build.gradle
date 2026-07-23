@@ -2,6 +2,13 @@ plugins {
     id "com.android.application"
 }
 
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace "com.kosmos.app"
     compileSdk 35
@@ -15,6 +22,25 @@ android {
     }
 
     flavorDimensions "app"
+
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                storeFile rootProject.file(keystoreProperties["storeFile"])
+                storePassword keystoreProperties["storePassword"]
+                keyAlias keystoreProperties["keyAlias"]
+                keyPassword keystoreProperties["keyPassword"]
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+            shrinkResources false
+        }
+    }
 
     productFlavors {
         watcher {
@@ -36,6 +62,13 @@ android {
             applicationId "com.kosmos.operator"
             resValue "string", "app_name", "Kosmos Operator"
             resValue "string", "start_url", "http://112.171.47.68:4000/operator"
+        }
+
+        tenant {
+            dimension "app"
+            applicationId "com.kosmos.visit"
+            resValue "string", "app_name", "KOSMOS 방문 등록"
+            resValue "string", "start_url", "http://112.171.47.68:4000/tenant/app"
         }
     }
 }

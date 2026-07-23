@@ -19,7 +19,10 @@ export class SensorEventsController {
   @Get()
   @UseGuards(JwtAuthGuard, PermissionGuard)
   @RequirePermission('device.read')
-  recent(@Query('limit') limit?: string) {
-    return this.sensorEventsService.recent(Number(limit ?? 100));
+  recent(
+    @Query('limit') limit?: string,
+    @Query('devEui') devEui?: string,
+  ) {
+    return this.sensorEventsService.recent(Number(limit ?? 100), devEui);
   }
 }

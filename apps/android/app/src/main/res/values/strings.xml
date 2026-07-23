@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">Kosmos</string>
-    <string name="start_url">http://172.30.1.95:4000</string>
+    <string name="start_url">http://112.171.47.68:4000</string>
 </resources>

@@ -66,7 +66,15 @@ function formatDate(value?: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
 
-  return date.toLocaleString();
+  return date.toLocaleString('ko-KR', {
+    year: '2-digit',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
 }
 
 function statusLabel(value?: string) {
@@ -86,6 +94,7 @@ export default function OperatorApprovalsPage({
 
   const [items, setItems] = useState<ApprovalItem[]>([]);
   const [selected, setSelected] = useState<ApprovalItem | null>(null);
+  const [detail, setDetail] = useState<ApprovalItem | null>(null);
   const [parkingLotIds, setParkingLotIds] = useState('');
   const [parkingSectionIds, setParkingSectionIds] = useState('');
   const [note, setNote] = useState('');
@@ -237,63 +246,78 @@ export default function OperatorApprovalsPage({
           </button>
         </div>
 
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-left text-slate-500">
-            <tr>
-              <th className="px-5 py-3">번호</th>
-              <th className="px-5 py-3">이름</th>
-              <th className="px-5 py-3">이메일</th>
-              <th className="px-5 py-3">전화번호</th>
-              <th className="px-5 py-3">회사명</th>
-              <th className="px-5 py-3">상태</th>
-              <th className="px-5 py-3">생성일</th>
-              <th className="px-5 py-3">처리</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {pagedItems.map((item, index) => (
-              <tr key={item.id} className="border-t">
-                <td className="px-5 py-3">
-                  {getRowNumber({
-                    page: meta.page,
-                    pageSize: meta.pageSize,
-                    index,
-                  })}
-                </td>
-                <td className="px-5 py-3">{item.name ?? '-'}</td>
-                <td className="px-5 py-3">{item.email ?? '-'}</td>
-                <td className="px-5 py-3">{item.phone ?? '-'}</td>
-                <td className="px-5 py-3">{item.companyName ?? '-'}</td>
-                <td className="px-5 py-3">{statusLabel(item.status)}</td>
-                <td className="px-5 py-3">{formatDate(item.createdAt)}</td>
-                <td className="px-5 py-3">
-                  <button
-                    type="button"
-                    onClick={() => setSelected(item)}
-                    className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white"
-                  >
-                    검토
-                  </button>
-                </td>
-              </tr>
-            ))}
-
-            {!loading && filteredItems.length === 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[980px] text-sm">
+            <thead className="bg-slate-50 text-left text-slate-500">
               <tr>
-                <td
-                  colSpan={8}
-                  className="px-5 py-10 text-center text-slate-500"
-                >
-                  대기 중인 운영자 계정 승인 요청이 없습니다.
-                </td>
+                <th className="whitespace-nowrap px-5 py-3">번호</th>
+                <th className="whitespace-nowrap px-5 py-3">이름</th>
+                <th className="whitespace-nowrap px-5 py-3">전화번호</th>
+                <th className="whitespace-nowrap px-5 py-3">회사명</th>
+                <th className="whitespace-nowrap px-5 py-3">상태</th>
+                <th className="whitespace-nowrap px-5 py-3">신청일</th>
+                <th className="whitespace-nowrap px-5 py-3">처리</th>
               </tr>
-            ) : null}
-          </tbody>
-        </table>
+            </thead>
+
+            <tbody>
+              {pagedItems.map((item, index) => (
+                <tr key={item.id} className="border-t">
+                  <td className="whitespace-nowrap px-5 py-3">
+                    {getRowNumber({
+                      page: meta.page,
+                      pageSize: meta.pageSize,
+                      index,
+                    })}
+                  </td>
+                  <td className="whitespace-nowrap px-5 py-3">
+                    <button
+                      type="button"
+                      onClick={() => setDetail(item)}
+                      className="font-semibold text-blue-600 underline-offset-2 hover:underline"
+                    >
+                      {item.name ?? '-'}
+                    </button>
+                  </td>
+                  <td className="whitespace-nowrap px-5 py-3">{item.phone ?? '-'}</td>
+                  <td className="whitespace-nowrap px-5 py-3">{item.companyName ?? '-'}</td>
+                  <td className="whitespace-nowrap px-5 py-3">{statusLabel(item.status)}</td>
+                  <td className="whitespace-nowrap px-5 py-3">{formatDate(item.createdAt)}</td>
+                  <td className="whitespace-nowrap px-5 py-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelected(item)}
+                      className="whitespace-nowrap rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white"
+                    >
+                      검토
+                    </button>
+                  </td>
+                </tr>
+              ))}
+
+              {!loading && filteredItems.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={7}
+                    className="px-5 py-10 text-center text-slate-500"
+                  >
+                    대기 중인 운영자 계정 승인 요청이 없습니다.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <PaginationBar meta={meta} />
+
+      {detail ? (
+        <OperatorDetailModal
+          item={detail}
+          onClose={() => setDetail(null)}
+        />
+      ) : null}
 
       {selected ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -356,7 +380,7 @@ export default function OperatorApprovalsPage({
                 type="button"
                 disabled={reviewing}
                 onClick={() => void review('REJECTED')}
-                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                className="whitespace-nowrap rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
                 반려
               </button>
@@ -364,7 +388,7 @@ export default function OperatorApprovalsPage({
                 type="button"
                 disabled={reviewing}
                 onClick={() => void review('APPROVED')}
-                className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                className="whitespace-nowrap rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
                 승인
               </button>
@@ -373,5 +397,61 @@ export default function OperatorApprovalsPage({
         </div>
       ) : null}
     </main>
+  );
+}
+
+function OperatorDetailModal({
+  item,
+  onClose,
+}: {
+  item: ApprovalItem;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-xl rounded-3xl bg-white p-6 shadow-2xl">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">운영자 신청 상세정보</h2>
+            <p className="mt-1 text-sm text-slate-500">{item.name ?? '-'}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border px-3 py-1 text-sm hover:bg-slate-50"
+          >
+            닫기
+          </button>
+        </div>
+
+        <div className="space-y-3 text-sm">
+          <DetailRow label="이름" value={item.name ?? '-'} />
+          <DetailRow label="이메일" value={item.email ?? '-'} />
+          <DetailRow label="전화번호" value={item.phone ?? '-'} />
+          <DetailRow label="회사명" value={item.companyName ?? '-'} />
+          <DetailRow label="상태" value={statusLabel(item.status)} />
+          <DetailRow label="신청일" value={formatDate(item.createdAt)} />
+        </div>
+
+        <div className="mt-6 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+          >
+            확인
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DetailRow({ label, value }: { label: string; value?: string | null }) {
+  return (
+    <div className="flex justify-between gap-4 border-b pb-2">
+      <span className="whitespace-nowrap text-slate-500">{label}</span>
+      <span className="text-right font-medium text-slate-900">{value ?? '-'}</span>
+    </div>
   );
 }

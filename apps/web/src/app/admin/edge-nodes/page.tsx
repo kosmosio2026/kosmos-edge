@@ -44,6 +44,9 @@ type EdgeNodeItem = {
   name: string;
   tenantId: string | null;
   tenantName: string | null;
+  managementCompanyId?: string | null;
+  managementCompanyName?: string | null;
+  managementCompanyCode?: string | null;
   status: string;
   appVersion: string | null;
   lastSeenAt: string | null;
@@ -73,21 +76,10 @@ type IssueKeyResponse = {
   warning?: string;
 };
 
-type TenantOption = {
-  id: string;
-  name: string;
-};
-
-type TenantOptionsResponse = {
-  ok: boolean;
-  items: TenantOption[];
-};
-
 type EdgeNodeForm = {
   code: string;
   name: string;
   status: string;
-  tenantId: string;
   appVersion: string;
 };
 
@@ -95,7 +87,6 @@ const emptyForm: EdgeNodeForm = {
   code: '',
   name: '',
   status: 'ACTIVE',
-  tenantId: '',
   appVersion: '',
 };
 
@@ -128,15 +119,12 @@ function toForm(item: EdgeNodeItem): EdgeNodeForm {
     code: item.code ?? '',
     name: item.name ?? '',
     status: item.status ?? 'ACTIVE',
-    tenantId: item.tenantId ?? '',
     appVersion: item.appVersion ?? '',
   };
 }
 
 export default function AdminEdgeNodesPage() {
   const [items, setItems] = useState<EdgeNodeItem[]>([]);
-  const [tenantOptions, setTenantOptions] = useState<TenantOption[]>([]);
-  const [tenantSearch, setTenantSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -155,13 +143,9 @@ export default function AdminEdgeNodesPage() {
     setError(null);
 
     try {
-      const [data, tenantData] = await Promise.all([
-        apiFetch<EdgeNodesResponse>('/edge-nodes'),
-        apiFetch<TenantOptionsResponse>('/edge-nodes/options/tenants'),
-      ]);
+      const data = await apiFetch<EdgeNodesResponse>('/edge-nodes');
 
       setItems(data.items ?? []);
-      setTenantOptions(tenantData.items ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Edge 노드 목록을 불러오지 못했습니다.');
     } finally {
@@ -183,23 +167,9 @@ export default function AdminEdgeNodesPage() {
     [items],
   );
 
-  const filteredTenantOptions = useMemo(() => {
-    const keyword = tenantSearch.trim().toLowerCase();
-
-    if (!keyword) return tenantOptions;
-
-    return tenantOptions.filter((tenant) => {
-      return (
-        tenant.name.toLowerCase().includes(keyword) ||
-        tenant.id.toLowerCase().includes(keyword)
-      );
-    });
-  }, [tenantOptions, tenantSearch]);
-
   function openCreateForm() {
     setEditingItem(null);
     setForm(emptyForm);
-    setTenantSearch('');
     setFormOpen(true);
     setIssuedApiKey(null);
     setError(null);
@@ -208,7 +178,6 @@ export default function AdminEdgeNodesPage() {
   function openEditForm(item: EdgeNodeItem) {
     setEditingItem(item);
     setForm(toForm(item));
-    setTenantSearch(item.tenantName ?? item.tenantId ?? '');
     setFormOpen(true);
     setIssuedApiKey(null);
     setError(null);
@@ -217,7 +186,6 @@ export default function AdminEdgeNodesPage() {
   function closeForm() {
     setEditingItem(null);
     setForm(emptyForm);
-    setTenantSearch('');
     setFormOpen(false);
     setSaving(false);
   }
@@ -242,7 +210,6 @@ export default function AdminEdgeNodesPage() {
       code: form.code.trim(),
       name: form.name.trim(),
       status: form.status,
-      tenantId: form.tenantId.trim() || null,
       appVersion: form.appVersion.trim() || null,
     };
 
@@ -394,7 +361,7 @@ export default function AdminEdgeNodesPage() {
                   {editingItem ? 'Edge 노드 수정' : 'Edge 노드 추가'}
                 </h2>
                 <p className="mt-1 text-xs text-slate-500">
-                  Tenant는 이름으로 검색해 선택할 수 있으며, 비워두면 미지정 상태로 저장됩니다.
+                  주차장운영사는 연결된 주차장을 기준으로 자동 결정됩니다.
                 </p>
               </div>
               <button
@@ -452,38 +419,6 @@ export default function AdminEdgeNodesPage() {
                   placeholder="1.0.0"
                 />
               </label>
-
-              <label className="grid gap-1 text-sm md:col-span-4">
-                <span className="font-medium text-slate-600">Tenant</span>
-                <input
-                  value={tenantSearch}
-                  onChange={(event) => setTenantSearch(event.target.value)}
-                  className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-700"
-                  placeholder="Tenant 이름 또는 ID 검색"
-                />
-
-                <select
-                  value={form.tenantId}
-                  onChange={(event) =>
-                    setForm((prev) => ({ ...prev, tenantId: event.target.value }))
-                  }
-                  className="rounded-xl border border-slate-300 px-3 py-2 outline-none focus:border-slate-700"
-                >
-                  <option value="">Tenant 미지정</option>
-                  {filteredTenantOptions.map((tenant) => (
-                    <option key={tenant.id} value={tenant.id}>
-                      {tenant.name} / {tenant.id}
-                    </option>
-                  ))}
-                </select>
-
-                {form.tenantId ? (
-                  <span className="text-xs text-slate-400">선택된 Tenant ID: {form.tenantId}</span>
-                ) : (
-                  <span className="text-xs text-slate-400">Tenant를 비워두면 미지정 상태로 저장됩니다.</span>
-                )}
-              </label>
-
               <div className="flex items-end">
                 <button
                   type="submit"
@@ -542,7 +477,7 @@ export default function AdminEdgeNodesPage() {
                   <tr>
                     <th className="px-5 py-3">Edge</th>
                     <th className="px-5 py-3">상태</th>
-                    <th className="px-5 py-3">Tenant</th>
+                    <th className="px-5 py-3">주차장운영사</th>
                     <th className="px-5 py-3">주차장</th>
                     <th className="px-5 py-3">담당 Manager</th>
                     <th className="px-5 py-3">API Key</th>
@@ -574,8 +509,8 @@ export default function AdminEdgeNodesPage() {
                         </td>
 
                         <td className="px-5 py-4">
-                          <div>{item.tenantName ?? '-'}</div>
-                          <div className="mt-1 text-xs text-slate-400">{item.tenantId ?? ''}</div>
+                          <div>{item.managementCompanyName ?? item.tenantName ?? '-'}</div>
+                          <div className="mt-1 text-xs text-slate-400">{item.managementCompanyId ?? ''}</div>
                         </td>
 
                         <td className="px-5 py-4">

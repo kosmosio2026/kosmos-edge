@@ -7,12 +7,18 @@ fn test_sensio_parser() {
     // header: [0x02, version=1, length=10]
     // body: temp=250 (25.0C), hum=50, pm1=10, pm2.5=20, pm10=30, flags=0b00011101
     let bytes: [u8; 13] = [
-        0x02, 0x01, 0x0A,
-        0x00, 0xFA, // 250
-        50,        // humidity
-        0x00, 0x0A,
-        0x00, 0x14,
-        0x00, 0x1E,
+        0x02,
+        0x01,
+        0x0A,
+        0x00,
+        0xFA, // 250
+        50,   // humidity
+        0x00,
+        0x0A,
+        0x00,
+        0x14,
+        0x00,
+        0x1E,
         0b0001_1101,
     ];
 

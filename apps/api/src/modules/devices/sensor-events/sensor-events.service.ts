@@ -1,3 +1,4 @@
+import { isConnectedEdgeProfile } from '../../../common/config/app-mode';
 import {
   BadRequestException,
   Injectable,
@@ -67,15 +68,6 @@ export class SensorEventsService {
     }
 
     return value as Record<string, any>;
-  }
-
-  private isEdgeMode() {
-    const profile =
-      process.env.APP_PROFILE ??
-      process.env.APP_MODE ??
-      '';
-
-    return profile.toLowerCase() === 'edge';
   }
 
   private telemetrySyncIntervalMs() {
@@ -379,7 +371,7 @@ export class SensorEventsService {
     },
   ) {
     if (
-      !this.isEdgeMode() ||
+      !isConnectedEdgeProfile() ||
       !input.device ||
       !input.parkingLotId
     ) {

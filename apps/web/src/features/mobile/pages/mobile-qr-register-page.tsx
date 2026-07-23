@@ -1,8 +1,11 @@
 'use client';
 
+import { normalizePin, validateVisitorPin } from '@parking/shared/validation';
 import { getPublicApiBaseUrl } from '@/lib/public-config';
 import { useRouter } from 'next/navigation';
+import { MobileAppShell } from '@/components/mobile/mobile-app-shell';
 import { useEffect, useMemo, useState } from 'react';
+import { FORM_HINTS, FORM_PLACEHOLDERS } from '@/lib/forms/placeholders';
 
 const API_BASE =
   getPublicApiBaseUrl();
@@ -176,7 +179,7 @@ function formatKoreanMobilePhone(value: string) {
 function blockManualHyphen(event: any, setMessage: (message: string | null) => void) {
   if (event.key === '-') {
     event.preventDefault();
-    setMessage('숫자만 입력하세요. 하이픈은 자동으로 입력됩니다.');
+    setMessage(FORM_HINTS.phoneDigitsOnly);
   }
 }
 
@@ -257,7 +260,7 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
   const [spaceViewMode, setSpaceViewMode] = useState<'list' | 'grid' | 'map'>('list');
   const [vehiclePlateNumber, setVehiclePlateNumber] = useState('');
   const [contactPhone, setContactPhone] = useState('');
-  const [registerMode, setRegisterMode] = useState<'visitor' | 'member'>('visitor');
+  const [registerMode, setRegisterMode] = useState<'visitor' | 'member'>('member');
 
   const [verificationCode, setVerificationCode] = useState('');
   const [verificationRequested, setVerificationRequested] = useState(false);
@@ -569,7 +572,7 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
       return;
     }
 
-    let normalizedVisitorPinCode = visitorPinCode.trim();
+    let normalizedVisitorPinCode = normalizePin(visitorPinCode);
 
     if (!visitorAlreadyLoggedIn) {
       if (!contactPhone.trim()) {
@@ -582,12 +585,15 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
         return;
       }
 
-      const normalizedVisitorPinCodeConfirm = visitorPinCodeConfirm.trim();
+      const pinValidation = validateVisitorPin(visitorPinCode);
+      const normalizedVisitorPinCodeConfirm = normalizePin(visitorPinCodeConfirm);
 
-      if (!/^\d{4,6}$/.test(normalizedVisitorPinCode)) {
-        setMessage('방문객 PIN은 4~6자리 숫자로 입력하세요.');
+      if (!pinValidation.ok) {
+        setMessage(pinValidation.message ?? '방문객 PIN은 4~6자리 숫자로 입력하세요.');
         return;
       }
+
+      normalizedVisitorPinCode = pinValidation.normalized;
 
       if (normalizedVisitorPinCode !== normalizedVisitorPinCodeConfirm) {
         setMessage('방문객 PIN 확인이 일치하지 않습니다.');
@@ -679,7 +685,11 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
   const mobileMemberLoggedIn = memberLoggedIn && hasMobileMemberToken();
 
   return (
-    <main className="min-h-screen bg-slate-950 px-4 py-6 text-slate-950">
+    <MobileAppShell
+      title="주차 등록"
+      subtitle="QR 코드로 주차면을 확인하고 등록하세요."
+    >
+      <div className="bg-slate-950 px-4 py-6 text-slate-950">
       <div className="mx-auto flex min-h-[calc(100vh-48px)] max-w-md flex-col">
         <section className="rounded-[2rem] bg-white p-5 shadow-2xl">
           <div className="rounded-[1.5rem] bg-slate-950 p-5 text-white">
@@ -727,33 +737,22 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
                   </a>
                   <div className="grid grid-cols-2 gap-2">
                     <a
-                      href={`/mobile/visitor/login?next=${encodeURIComponent('/mobile/payments')}`}
-                      className="rounded-2xl bg-white px-3 py-3 text-center text-xs font-black text-blue-700 ring-1 ring-blue-100"
-                    >
-                      방문객 PIN 로그인
-                    </a>
-                    <a
                       href={`/mobile/member/login?next=${encodeURIComponent('/mobile/payments')}`}
                       className="rounded-2xl bg-white px-3 py-3 text-center text-xs font-black text-blue-700 ring-1 ring-blue-100"
                     >
                       회원 로그인
+                    </a>
+                    <a
+                      href={`/mobile/visitor/login?next=${encodeURIComponent('/mobile/payments')}`}
+                      className="rounded-2xl bg-white px-3 py-3 text-center text-xs font-black text-blue-700 ring-1 ring-blue-100"
+                    >
+                      방문객 PIN 로그인
                     </a>
                   </div>
                 </div>
               </div>
 
               <div className="mt-5 grid grid-cols-2 gap-2 rounded-3xl bg-slate-100 p-1">
-                <button
-                  type="button"
-                  onClick={() => setRegisterMode('visitor')}
-                  className={`rounded-2xl px-4 py-3 text-sm font-black ${
-                    registerMode === 'visitor'
-                      ? 'bg-white text-slate-950 shadow-sm'
-                      : 'text-slate-500'
-                  }`}
-                >
-                  방문자
-                </button>
                 <button
                   type="button"
                   onClick={() => setRegisterMode('member')}
@@ -764,6 +763,17 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
                   }`}
                 >
                   회원
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRegisterMode('visitor')}
+                  className={`rounded-2xl px-4 py-3 text-sm font-black ${
+                    registerMode === 'visitor'
+                      ? 'bg-white text-slate-950 shadow-sm'
+                      : 'text-slate-500'
+                  }`}
+                >
+                  방문객
                 </button>
               </div>
 
@@ -813,6 +823,12 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
                           회원가입
                         </a>
                       </div>
+                      <a
+                        href="/mobile/member/password-reset"
+                        className="mt-2 block text-center text-xs font-black text-blue-700 underline underline-offset-4"
+                      >
+                        비밀번호를 잊으셨나요?
+                      </a>
                     </div>
                   ) : (
                     <div className="rounded-3xl bg-blue-50 p-4 text-sm text-blue-700">
@@ -1031,7 +1047,7 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
                     <input
                       value={vehiclePlateNumber}
                       onChange={(event) => setVehiclePlateNumber(event.target.value)}
-                      placeholder="예: 12가3456"
+                      placeholder={FORM_PLACEHOLDERS.plateNumber}
                       className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-4 text-base font-bold outline-none focus:border-blue-500"
                     />
                   </label>
@@ -1064,12 +1080,12 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
                           setVerificationRequested(false);
                           setVerificationCode('');
                         }}
-                        placeholder="예: 01029831136"
+                        placeholder={FORM_PLACEHOLDERS.mobilePhone}
                         inputMode="numeric"
                         className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-4 text-base font-bold outline-none focus:border-blue-500"
                       />
                       <p className="mt-2 text-xs font-bold text-slate-400">
-                        숫자만 입력하세요. 하이픈은 자동으로 입력됩니다.
+                        {FORM_HINTS.phoneDigitsOnly}
                       </p>
                     </label>
                   )}
@@ -1097,7 +1113,7 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
                         <div className="mt-3 flex gap-2">
                           <input
                             value={verificationCode}
-                            onChange={(event) => setVerificationCode(event.target.value)}
+                            onChange={(event) => setVerificationCode(event.target.value.replace(/[^0-9]/g, '').slice(0, 6))}
                             placeholder="인증번호 6자리"
                             inputMode="numeric"
                             className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold outline-none focus:border-blue-500"
@@ -1133,8 +1149,8 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
                     </span>
                     <input
                       value={visitorPinCode}
-                      onChange={(event) => setVisitorPinCode(event.target.value)}
-                      placeholder="4~6자리 숫자"
+                      onChange={(event) => setVisitorPinCode(normalizePin(event.target.value))}
+                      placeholder={FORM_PLACEHOLDERS.visitorPin}
                       inputMode="numeric"
                       type="password"
                       maxLength={6}
@@ -1148,8 +1164,8 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
                     </span>
                     <input
                       value={visitorPinCodeConfirm}
-                      onChange={(event) => setVisitorPinCodeConfirm(event.target.value)}
-                      placeholder="PIN 다시 입력"
+                      onChange={(event) => setVisitorPinCodeConfirm(normalizePin(event.target.value))}
+                      placeholder={FORM_PLACEHOLDERS.visitorPinConfirm}
                       inputMode="numeric"
                       type="password"
                       maxLength={6}
@@ -1158,7 +1174,7 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
                   </label>
 
                   <p className="text-xs font-bold text-slate-400">
-                    방문객 로그인과 출차/결제 확인에 사용할 PIN입니다.
+                    {FORM_HINTS.visitorPinPolicy}
                   </p>
                 </div>
               ) : null}
@@ -1191,6 +1207,7 @@ export default function MobileQrRegisterPage({ qrToken, initialSpaceCode = '' }:
 
 
       </div>
-    </main>
+    </div>
+  </MobileAppShell>
   );
 }

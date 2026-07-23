@@ -25,14 +25,23 @@ BEGIN
   END IF;
 END $$;
 
-UPDATE "ParkingSession" s
-SET "primaryInvoiceId" = base_invoice.id
-FROM LATERAL (
-  SELECT i.id
+WITH primary_candidates AS (
+  SELECT DISTINCT ON (i."sessionId")
+    i."sessionId",
+    i.id AS invoice_id
   FROM "Invoice" i
-  WHERE i."sessionId" = s.id
-    AND COALESCE(i.metadata->>'invoiceKind', 'PARKING_FEE') <> 'ADDITIONAL_FEE'
-  ORDER BY i."createdAt" ASC
-  LIMIT 1
-) base_invoice
-WHERE s."primaryInvoiceId" IS NULL;
+  WHERE i."sessionId" IS NOT NULL
+    AND COALESCE(
+      i.metadata ->> 'invoiceKind',
+      'PARKING_FEE'
+    ) <> 'ADDITIONAL_FEE'
+  ORDER BY
+    i."sessionId",
+    i."createdAt" ASC,
+    i.id ASC
+)
+UPDATE "ParkingSession" s
+SET "primaryInvoiceId" = c.invoice_id
+FROM primary_candidates c
+WHERE c."sessionId" = s.id
+  AND s."primaryInvoiceId" IS NULL;

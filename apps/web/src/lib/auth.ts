@@ -1,3 +1,4 @@
+import { isEdgeWeb } from '@/lib/app-profile';
 import type { AuthSession } from '@/types/auth';
 
 const STORAGE_KEY = 'parking.auth.session';
@@ -72,7 +73,7 @@ export async function login(
 export function getDefaultRedirectPath(session: AuthSession) {
   const roles = session.user.roles ?? [];
 
-  if (roles.includes('ADMIN')) return '/admin/dashboard';
+  if (roles.includes('ADMIN') && !isEdgeWeb()) return '/admin/dashboard';
   if (roles.includes('MANAGER')) return '/manager/dashboard';
   if (roles.includes('OPERATOR')) return '/operator';
   if (roles.includes('MEMBER')) return '/member';

@@ -6,7 +6,7 @@ export class FilesService {
     const publicBaseUrl =
       process.env.PUBLIC_API_BASE_URL ??
       process.env.API_PUBLIC_BASE_URL ??
-      'http://172.30.1.95:3000';
+      'http://112.171.47.68:3000';
 
     return `${publicBaseUrl.replace(/\/$/, '')}/uploads/${kind}/${filename}`;
   }

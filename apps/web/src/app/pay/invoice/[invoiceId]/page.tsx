@@ -2,13 +2,13 @@
 
 import { getPublicApiBaseUrl } from '@/lib/public-config';
 import { useEffect, useMemo, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 
 const API_BASE =
   getPublicApiBaseUrl();
 
 const APP_BASE =
-  process.env.NEXT_PUBLIC_APP_URL ?? 'http://172.30.1.95:4000';
+  process.env.NEXT_PUBLIC_APP_URL ?? 'http://112.171.47.68:4000';
 
 const TOSS_CLIENT_KEY = process.env.NEXT_PUBLIC_TOSS_CLIENT_KEY ?? '';
 
@@ -68,11 +68,9 @@ function InfoRow({ label, value }: { label: string; value: any }) {
 
 export default function PublicInvoicePage() {
   const params = useParams();
-  const router = useRouter();
   const invoiceId = String(params?.invoiceId ?? '');
 
   const [loading, setLoading] = useState(true);
-  const [paying, setPaying] = useState(false);
   const [preparingToss, setPreparingToss] = useState(false);
   const [message, setMessage] = useState('');
   const [data, setData] = useState<any>(null);
@@ -115,14 +113,14 @@ export default function PublicInvoicePage() {
       const json = await res.json();
 
       if (!res.ok) {
-        throw new Error(json?.message ?? 'Toss 결제 준비에 실패했습니다.');
+        throw new Error(json?.message ?? '결제 준비에 실패했습니다.');
       }
 
       setTossPayment(json?.payment ?? null);
-      setMessage('Toss 결제 준비가 완료되었습니다.');
+      setMessage('결제 준비가 완료되었습니다.');
       return json?.payment ?? null;
     } catch (error: any) {
-      setMessage(error?.message ?? 'Toss 결제 준비에 실패했습니다.');
+      setMessage(error?.message ?? '결제 준비에 실패했습니다.');
       return null;
     } finally {
       setPreparingToss(false);
@@ -135,14 +133,14 @@ export default function PublicInvoicePage() {
     if (!preparedPayment) return;
 
     if (!TOSS_CLIENT_KEY || TOSS_CLIENT_KEY.includes('여기에_')) {
-      setMessage('Toss Client Key를 apps/web/.env.local에 설정하세요.');
+      setMessage('결제 설정이 완료되지 않았습니다.');
       return;
     }
 
     const tossFactory = (window as any).TossPayments;
 
     if (!tossFactory) {
-      setMessage('Toss SDK가 아직 로드되지 않았습니다. 잠시 후 다시 시도하세요.');
+      setMessage('결제창이 아직 로드되지 않았습니다. 잠시 후 다시 시도하세요.');
       return;
     }
 
@@ -156,44 +154,6 @@ export default function PublicInvoicePage() {
       successUrl: `${APP_BASE}/pay/toss/success?invoiceId=${invoiceId}`,
       failUrl: `${APP_BASE}/pay/toss/fail?invoiceId=${invoiceId}`,
     });
-  }
-
-  async function mockPay() {
-    if (!invoiceId) return;
-
-    setPaying(true);
-    setMessage('');
-
-    try {
-      const invoice = data?.invoice ?? {};
-      const amount =
-        Number(invoice.unpaidAmount ?? 0) > 0
-          ? Number(invoice.unpaidAmount)
-          : undefined;
-
-      const res = await fetch(`${API_BASE}/invoices/${invoiceId}/mock-pay`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          amount,
-          method: 'MOCK_CARD',
-        }),
-      });
-      const json = await res.json();
-
-      if (!res.ok) {
-        throw new Error(json?.message ?? '테스트 결제에 실패했습니다.');
-      }
-
-      setMessage('결제가 완료되었습니다.');
-      await loadInvoice();
-    } catch (error: any) {
-      setMessage(error?.message ?? '테스트 결제에 실패했습니다.');
-    } finally {
-      setPaying(false);
-    }
   }
 
   useEffect(() => {
@@ -245,6 +205,21 @@ export default function PublicInvoicePage() {
     pricing.registrationGraceDiscountAmount,
     0,
   );
+  const automaticDiscounts = Array.isArray(pricing.automaticDiscounts)
+    ? pricing.automaticDiscounts
+    : [];
+  const automaticDiscountAmount = pickAmount(
+    pricing.automaticDiscountAmount,
+    invoice.metadata?.automaticDiscountAmount,
+    0,
+  );
+  const tenantCoupon =
+    pricing.tenantCoupon ?? invoice.metadata?.tenantCoupon ?? null;
+  const tenantCouponDiscountAmount = pickAmount(
+    pricing.tenantCouponDiscountAmount,
+    invoice.metadata?.tenantCouponDiscountAmount,
+    0,
+  );
   const finalAmount = pickAmount(
     invoice.finalAmount,
     pricing.finalAmount,
@@ -254,6 +229,35 @@ export default function PublicInvoicePage() {
   const unpaidAmount = pickAmount(
     invoice.unpaidAmount,
     finalAmount !== null ? Math.max(0, finalAmount - (paidAmount ?? 0)) : null,
+  );
+
+  const taxType = String(invoice.taxType ?? pricing.taxType ?? receipt?.taxType ?? 'VAT_INCLUDED');
+  const taxTypeLabel = taxType === 'TAX_EXEMPT' ? '면세' : '부가세 포함';
+
+  const fallbackSupplyAmount =
+    finalAmount !== null
+      ? taxType === 'TAX_EXEMPT'
+        ? finalAmount
+        : Math.round((finalAmount * 10) / 11)
+      : null;
+
+  const supplyAmount = pickAmount(
+    invoice.supplyAmount,
+    receipt?.supplyAmount,
+    fallbackSupplyAmount,
+  );
+
+  const vatAmount = pickAmount(
+    invoice.vatAmount,
+    receipt?.taxAmount,
+    finalAmount !== null && supplyAmount !== null
+      ? Math.max(0, finalAmount - supplyAmount)
+      : 0,
+  );
+
+  const taxExemptAmount = pickAmount(
+    invoice.taxExemptAmount,
+    taxType === 'TAX_EXEMPT' ? finalAmount : 0,
   );
 
   const isPaid =
@@ -278,13 +282,12 @@ export default function PublicInvoicePage() {
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => router.back()}
+            <a
+              href="/mobile/payments"
               className="rounded-full bg-slate-100 px-3 py-2 text-xs font-black text-slate-600"
             >
-              이전
-            </button>
+              목록
+            </a>
           </div>
 
           <a
@@ -344,7 +347,42 @@ export default function PublicInvoicePage() {
                         : formatMoney(0)
                     }
                   />
-                  <InfoRow label="최종 청구금액" value={formatMoney(finalAmount)} />
+                  {automaticDiscounts.length > 0
+                    ? automaticDiscounts.map((discount: any) => (
+                        <InfoRow
+                          key={`${discount.programId}-${discount.appliedOrder}`}
+                          label={discount.programName ?? '자동 할인'}
+                          value={`-${formatMoney(discount.discountAmount ?? 0)}`}
+                        />
+                      ))
+                    : automaticDiscountAmount && automaticDiscountAmount > 0
+                      ? (
+                          <InfoRow
+                            label="자동 할인"
+                            value={`-${formatMoney(automaticDiscountAmount)}`}
+                          />
+                        )
+                      : null}
+                  {tenantCouponDiscountAmount && tenantCouponDiscountAmount > 0 ? (
+                    <InfoRow
+                      label={
+                        tenantCoupon?.tenantName
+                          ? `${tenantCoupon.tenantName} 할인권`
+                          : 'Tenant 할인권'
+                      }
+                      value={`-${formatMoney(tenantCouponDiscountAmount)}`}
+                    />
+                  ) : null}
+                  {tenantCoupon?.codeMasked ? (
+                    <InfoRow label="할인권 번호" value={tenantCoupon.codeMasked} />
+                  ) : null}
+                  <InfoRow label="과세 구분" value={taxTypeLabel} />
+                  <InfoRow label="공급가액" value={formatMoney(supplyAmount)} />
+                  <InfoRow label="부가세" value={formatMoney(vatAmount)} />
+                  {taxType === 'TAX_EXEMPT' ? (
+                    <InfoRow label="면세 금액" value={formatMoney(taxExemptAmount)} />
+                  ) : null}
+                  <InfoRow label="총 청구금액" value={formatMoney(finalAmount)} />
                   <InfoRow label="결제 완료금액" value={formatMoney(paidAmount)} />
                   <InfoRow label="남은 결제금액" value={formatMoney(unpaidAmount)} />
                 </div>
@@ -358,6 +396,8 @@ export default function PublicInvoicePage() {
                     <InfoRow label="승인번호" value={receipt.approvalNo ?? receipt.approvalNumber ?? '-'} />
                     <InfoRow label="결제수단" value={receipt.method ?? receipt.paymentMethod ?? '테스트 카드'} />
                     <InfoRow label="결제금액" value={formatMoney(receipt.amount ?? receipt.paidAmount ?? invoice.paidAmount)} />
+                    <InfoRow label="공급가액" value={formatMoney(receipt.supplyAmount ?? supplyAmount)} />
+                    <InfoRow label="부가세" value={formatMoney(receipt.taxAmount ?? vatAmount)} />
                     <InfoRow label="결제일시" value={formatDate(receipt.paidAt ?? invoice.paidAt)} />
                   </div>
                 </div>
@@ -371,32 +411,34 @@ export default function PublicInvoicePage() {
                     disabled={preparingToss}
                     className="w-full rounded-2xl bg-slate-950 px-5 py-4 text-center text-base font-black text-white shadow-lg shadow-slate-950/20 disabled:opacity-50"
                   >
-                    {preparingToss ? 'Toss 결제 준비 중...' : 'Toss 결제창 열기'}
+                    {preparingToss ? '결제 준비 중...' : '요금 결제'}
                   </button>
 
                   {tossPayment ? (
                     <div className="rounded-2xl bg-slate-100 px-4 py-4 text-sm font-bold text-slate-700">
-                      <p className="font-black text-slate-950">Toss 결제 준비 완료</p>
+                      <p className="font-black text-slate-950">결제 준비 완료</p>
                       <p className="mt-2">주문번호: {tossPayment.orderId}</p>
                       <p>결제금액: {formatMoney(tossPayment.amount)}</p>
                       <p className="mt-2 text-xs text-slate-500">
-                        Toss 결제창 호출 준비가 완료되었습니다.
+                        결제창 호출 준비가 완료되었습니다.
                       </p>
                     </div>
                   ) : null}
-
-                  <button
-                    type="button"
-                    onClick={mockPay}
-                    disabled={paying}
-                    className="w-full rounded-2xl bg-blue-600 px-5 py-4 text-center text-base font-black text-white shadow-lg shadow-blue-600/20 disabled:opacity-50"
-                  >
-                    {paying ? '결제 처리 중...' : '테스트 결제하기'}
-                  </button>
                 </div>
               ) : (
-                <div className="rounded-2xl bg-emerald-600 px-5 py-4 text-center text-base font-black text-white">
-                  결제가 완료되었습니다.
+                <div className="space-y-3">
+                  <div className="rounded-2xl bg-emerald-600 px-5 py-4 text-center text-base font-black text-white">
+                    결제가 완료되었습니다.
+                  </div>
+                  <div className="rounded-2xl bg-emerald-50 px-4 py-4 text-sm font-bold leading-6 text-emerald-800">
+                    결제 후 10분 이내에 출차하세요. 유예시간이 지나면 추가 요금이 발생할 수 있습니다.
+                  </div>
+                  <a
+                    href="/mobile/current-parking"
+                    className="block rounded-2xl bg-slate-100 px-5 py-4 text-center text-sm font-black text-slate-700"
+                  >
+                    현재 주차 현황으로 돌아가기
+                  </a>
                 </div>
               )}
             </div>

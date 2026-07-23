@@ -14,10 +14,19 @@
     "skipLibCheck": true,
     "strict": true,
     "moduleResolution": "node",
-    "types": ["node"],
-     "paths": {
-      "@parking/db": ["../../packages/db"]
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@parking/db": [
+        "../../packages/db"
+      ],
+      "@parking/db/security/password": [
+        "../../packages/db/dist/src/security/password"
+      ]
     }
   },
-  "include": ["src/**/*"]
+  "include": [
+    "src/**/*"
+  ]
 }

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -54,7 +55,11 @@ export class DevicesController {
     @Query('type') type?: string,
     @Query('status') status?: string,
   ) {
-    return this.devicesService.listDevices({ q, type, status });
+    return this.devicesService.listDevices({
+      q,
+      type: type ?? 'PARKING_SENSOR',
+      status,
+    });
   }
 
   @Get('sensors/:id')
@@ -62,6 +67,13 @@ export class DevicesController {
   @RequirePermission(PERMISSIONS.DEVICE_READ)
   getDeviceById(@Param('id') id: string) {
     return this.devicesService.getDeviceById(id);
+  }
+
+  @Post('validate-import')
+  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @RequirePermission('device.manage')
+  validateImport(@Body() body: { rows?: Record<string, unknown>[] }) {
+    return this.devicesService.validateImportRows(body.rows ?? []);
   }
 
   @Post()
@@ -112,6 +124,20 @@ export class DevicesController {
     @Body() dto: { parkingSpaceId?: string | null },
   ) {
     return this.devicesService.mapDeviceToSpace(id, dto.parkingSpaceId ?? null);
+  }
+
+  @Delete('sensors/:id')
+  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @RequirePermission('device.manage')
+  deleteDevice(@Param('id') id: string) {
+    return this.devicesService.deleteDevice(id);
+  }
+
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard, PermissionGuard)
+  @RequirePermission('device.manage')
+  deleteAlias(@Param('id') id: string) {
+    return this.devicesService.deleteDevice(id);
   }
 
   @Post('link-sensor-to-space')

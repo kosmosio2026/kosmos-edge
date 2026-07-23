@@ -55,7 +55,7 @@ export class EdgeApiKeyGuard implements CanActivate {
       edgeNodeId: edgeKey.edgeNode.id,
       edgeCode: edgeKey.edgeNode.code,
       edgeName: edgeKey.edgeNode.name,
-      tenantId: edgeKey.edgeNode.tenantId ?? null,
+      managementCompanyId: edgeKey.edgeNode.managementCompanyId ?? null,
       apiKeyId: edgeKey.id,
       keyId: edgeKey.keyId,
     };

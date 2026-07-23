@@ -1,10 +1,17 @@
+import { calculateTaxBreakdown } from './tax-breakdown';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@parking/db';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AutomaticDiscountService } from './automatic-discount.service';
+import { TenantCouponsService } from '../tenants/tenant-coupons.service';
 
 @Injectable()
 export class BillingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly automaticDiscountService: AutomaticDiscountService,
+    private readonly tenantCouponsService: TenantCouponsService,
+  ) {}
 
   private diffMinutes(start?: Date | null, end?: Date | null) {
     if (!start || !end) {
@@ -15,6 +22,15 @@ export class BillingService {
       0,
       Math.ceil((end.getTime() - start.getTime()) / 60000),
     );
+  }
+
+  private parseOptionalDate(value: unknown) {
+    if (typeof value !== 'string' || !value.trim()) {
+      return null;
+    }
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
   private isSelfRegistrationMethod(method?: string | null) {
@@ -153,6 +169,63 @@ export class BillingService {
       throw new NotFoundException('Parking session not found');
     }
 
+    const exitTime = options?.exitTime ?? session.exitTime ?? new Date();
+    const invoiceMetadata = (session.invoice?.metadata ?? {}) as any;
+    const sessionMetadata = (session.metadata ?? {}) as any;
+    const paidExitGraceUntil = this.parseOptionalDate(
+      sessionMetadata.paidExitGraceUntil,
+    );
+    const hasFullyPaidInvoice =
+      session.invoice?.status === 'PAID' &&
+      Number(session.invoice.unpaidAmount ?? 0) <= 0;
+
+    if (hasFullyPaidInvoice && session.invoice) {
+      if (
+        paidExitGraceUntil &&
+        exitTime.getTime() > paidExitGraceUntil.getTime()
+      ) {
+        throw new BadRequestException(
+          '결제 후 출차 유예시간이 만료되었습니다. 기존 결제 청구서는 변경할 수 없으므로 추가요금 정산 후 출차하세요.',
+        );
+      }
+
+      return {
+        session,
+        invoice: session.invoice,
+        calculation: {
+          totalMinutes: Number(
+            invoiceMetadata.totalMinutes ?? session.totalMinutes ?? 0,
+          ),
+          baseParkingAmount: Number(
+            invoiceMetadata.baseParkingAmount ??
+              session.invoice.baseParkingAmount ??
+              session.invoice.finalAmount,
+          ),
+          directRegistrationDiscountAmount: Number(
+            invoiceMetadata.directRegistrationDiscountAmount ?? 0,
+          ),
+          registrationGraceDiscountAmount: Number(
+            invoiceMetadata.registrationGraceDiscountAmount ?? 0,
+          ),
+          watcherRewardBasisAmount: Number(
+            invoiceMetadata.watcherRewardBasisAmount ?? 0,
+          ),
+          automaticDiscountAmount: Number(
+            invoiceMetadata.automaticDiscountAmount ?? 0,
+          ),
+          automaticDiscounts: invoiceMetadata.automaticDiscounts ?? [],
+          tenantCouponDiscountAmount: Number(
+            invoiceMetadata.tenantCouponDiscountAmount ?? 0,
+          ),
+          tenantCoupon: invoiceMetadata.tenantCoupon ?? null,
+          finalAmount: session.invoice.finalAmount,
+          paidAmount: session.invoice.paidAmount,
+          unpaidAmount: session.invoice.unpaidAmount,
+          preservedPaidInvoice: true,
+        },
+      };
+    }
+
     const parkingLotId = session.ParkingSpace?.section?.parkingLot?.id;
     const vehicleType = session.feePolicy?.vehicleType ?? 'GENERAL';
 
@@ -186,7 +259,6 @@ export class BillingService {
       throw new BadRequestException('Active fee policy not found');
     }
 
-    const exitTime = options?.exitTime ?? session.exitTime ?? new Date();
     const totalMinutes = this.diffMinutes(session.entryTime, exitTime);
 
     const baseParkingAmount = this.calculateBaseParkingAmount(
@@ -200,10 +272,39 @@ export class BillingService {
     const watcherRewardBasisAmount =
       this.calculateWatcherRewardBasis(session, feePolicy);
 
-    const finalAmount = Math.max(
+    const amountBeforeAutomaticDiscount = Math.max(
       0,
       baseParkingAmount - directRegistrationDiscountAmount,
     );
+
+    const automaticDiscount =
+      await this.automaticDiscountService.calculateForSession({
+        sessionId: session.id,
+        baseParkingAmount,
+        amountBeforeAutomaticDiscount,
+        totalMinutes,
+        feePolicy,
+        now: exitTime,
+      });
+
+    const tenantCoupon =
+      await this.tenantCouponsService.calculateReservedCouponDiscount({
+        sessionId: session.id,
+        amountBeforeCoupon: automaticDiscount.finalAmount,
+        baseParkingAmount,
+        automaticDiscountAmount: automaticDiscount.totalDiscountAmount,
+        totalMinutes,
+        feePolicy,
+        now: exitTime,
+      });
+
+    const finalAmount = tenantCoupon.finalAmount;
+    const totalDiscountAmount =
+      directRegistrationDiscountAmount +
+      automaticDiscount.totalDiscountAmount +
+      tenantCoupon.discountAmount;
+
+    const taxBreakdown = calculateTaxBreakdown(finalAmount, feePolicy.taxType);
 
     const paidAmount = session.invoice?.paidAmount ?? 0;
     const unpaidAmount = Math.max(0, finalAmount - paidAmount);
@@ -218,7 +319,15 @@ export class BillingService {
       directRegistrationDiscountAmount,
       registrationGraceDiscountAmount: directRegistrationDiscountAmount,
       watcherRewardBasisAmount,
+      automaticDiscountAmount: automaticDiscount.totalDiscountAmount,
+      automaticDiscounts: automaticDiscount.applications,
+      tenantCouponDiscountAmount: tenantCoupon.discountAmount,
+      tenantCoupon,
       finalAmount,
+      taxType: taxBreakdown.taxType,
+      supplyAmount: taxBreakdown.supplyAmount,
+      vatAmount: taxBreakdown.vatAmount,
+      taxExemptAmount: taxBreakdown.taxExemptAmount,
       paidAmount,
       unpaidAmount,
       policy: {
@@ -240,6 +349,7 @@ export class BillingService {
           feePolicy.authorityRegistrationGraceDiscountEnabled,
         watcherRewardGraceFeeEnabled:
           feePolicy.watcherRewardGraceFeeEnabled,
+        taxType: feePolicy.taxType,
       },
       session: {
         id: session.id,
@@ -260,7 +370,7 @@ export class BillingService {
         sessionId: session.id,
         status: unpaidAmount > 0 ? 'ISSUED' : 'PAID',
         amount: finalAmount,
-        discountAmount: directRegistrationDiscountAmount,
+        discountAmount: totalDiscountAmount,
         paidAmount,
         unpaidAmount,
         baseParkingAmount,
@@ -268,6 +378,10 @@ export class BillingService {
         authorityRegistrationSurchargeAmount: 0,
         watcherRewardBasisAmount,
         finalAmount,
+        taxType: taxBreakdown.taxType as any,
+        supplyAmount: taxBreakdown.supplyAmount,
+        vatAmount: taxBreakdown.vatAmount,
+        taxExemptAmount: taxBreakdown.taxExemptAmount,
         issuedAt: new Date(),
         paidAt: unpaidAmount > 0 ? null : new Date(),
         metadata: pricingSnapshot as any,
@@ -275,7 +389,7 @@ export class BillingService {
       update: {
         status: unpaidAmount > 0 ? 'ISSUED' : 'PAID',
         amount: finalAmount,
-        discountAmount: directRegistrationDiscountAmount,
+        discountAmount: totalDiscountAmount,
         paidAmount,
         unpaidAmount,
         baseParkingAmount,
@@ -283,6 +397,10 @@ export class BillingService {
         authorityRegistrationSurchargeAmount: 0,
         watcherRewardBasisAmount,
         finalAmount,
+        taxType: taxBreakdown.taxType as any,
+        supplyAmount: taxBreakdown.supplyAmount,
+        vatAmount: taxBreakdown.vatAmount,
+        taxExemptAmount: taxBreakdown.taxExemptAmount,
         issuedAt: session.invoice?.issuedAt ?? new Date(),
         paidAt: unpaidAmount > 0 ? null : session.invoice?.paidAt ?? new Date(),
         metadata: pricingSnapshot as any,
@@ -301,11 +419,26 @@ export class BillingService {
         unpaidAmount,
         feePolicyId: feePolicy.id,
         billingClosedAt: new Date(),
+        primaryInvoiceId: invoice.id,
       },
       include: {
         invoice: true,
       },
     });
+
+    await this.automaticDiscountService.replaceSessionSnapshots({
+      sessionId: session.id,
+      invoiceId: invoice.id,
+      result: automaticDiscount,
+    });
+
+    if (unpaidAmount <= 0 && tenantCoupon.couponId) {
+      await this.tenantCouponsService.completeReservedCouponForInvoice({
+        sessionId: session.id,
+        invoiceId: invoice.id,
+        actorUserId: session.userId,
+      });
+    }
 
     return {
       session: updatedSession,
@@ -316,6 +449,10 @@ export class BillingService {
         directRegistrationDiscountAmount,
         registrationGraceDiscountAmount: directRegistrationDiscountAmount,
         watcherRewardBasisAmount,
+        automaticDiscountAmount: automaticDiscount.totalDiscountAmount,
+        automaticDiscounts: automaticDiscount.applications,
+        tenantCouponDiscountAmount: tenantCoupon.discountAmount,
+        tenantCoupon,
         finalAmount,
         paidAmount,
         unpaidAmount,
@@ -554,9 +691,9 @@ export class BillingService {
         sessionId: invoice.sessionId,
         ownerUserId: invoice.session?.userId ?? null,
         ownerPhone: invoice.session?.contactPhone ?? null,
-        supplyAmount: invoice.amount,
-        taxAmount: 0,
-        totalAmount: invoice.amount,
+        supplyAmount: invoice.supplyAmount ?? invoice.amount,
+        taxAmount: invoice.vatAmount ?? 0,
+        totalAmount: invoice.finalAmount ?? invoice.amount,
         status: 'ISSUED' as any,
         metadata: {
           issuedBy: 'billing.issueReceipt',

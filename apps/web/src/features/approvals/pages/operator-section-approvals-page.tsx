@@ -36,7 +36,15 @@ function formatDate(value?: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
 
-  return date.toLocaleString();
+  return date.toLocaleString('ko-KR', {
+    year: '2-digit',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
 }
 
 function statusLabel(value?: string | null) {
@@ -143,80 +151,78 @@ export default function OperatorSectionApprovalsPage({
       ) : null}
 
       <section className="overflow-hidden rounded-2xl border bg-white w-full max-w-none">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-slate-50 text-slate-600">
-            <tr>
-              <th className="px-4 py-3">번호</th>
-              <th className="px-4 py-3">신청자</th>
-              <th className="px-4 py-3">이메일</th>
-              <th className="px-4 py-3">주차장</th>
-              <th className="px-4 py-3">구역</th>
-              <th className="px-4 py-3">상태</th>
-              <th className="px-4 py-3">생성일</th>
-              <th className="px-4 py-3">처리</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {items.map((item, index) => (
-              <tr key={item.id} className="border-t">
-                <td className="px-4 py-3">{index + 1}</td>
-                <td className="px-4 py-3">
-                  {item.requester?.name ?? item.name ?? '-'}
-                </td>
-                <td className="px-4 py-3">
-                  {item.requester?.email ?? item.email ?? '-'}
-                </td>
-                <td className="px-4 py-3">
-                  {item.parkingLot?.name ??
-                    item.parkingLot?.code ??
-                    item.requestedParkingLotId ??
-                    '-'}
-                </td>
-                <td className="px-4 py-3">
-                  {item.parkingSection?.name ??
-                    item.parkingSection?.code ??
-                    item.requestedSectionId ??
-                    '-'}
-                </td>
-                <td className="px-4 py-3">{statusLabel(item.status)}</td>
-                <td className="px-4 py-3">{formatDate(item.createdAt)}</td>
-                <td className="px-4 py-3">
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      disabled={reviewingId === item.id}
-                      onClick={() => review(item.id, 'APPROVED')}
-                      className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50"
-                    >
-                      승인
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={reviewingId === item.id}
-                      onClick={() => review(item.id, 'REJECTED')}
-                      className="rounded-xl border px-3 py-2 text-xs font-medium text-slate-700 disabled:opacity-50"
-                    >
-                      반려
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-
-            {!loading && items.length === 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[980px] text-left text-sm">
+            <thead className="bg-slate-50 text-slate-600">
               <tr>
-                <td
-                  colSpan={8}
-                  className="px-4 py-10 text-center text-slate-500"
-                >
-                  대기 중인 운영자 구역 권한 승인 요청이 없습니다.
-                </td>
+                <th className="whitespace-nowrap px-4 py-3">번호</th>
+                <th className="whitespace-nowrap px-4 py-3">신청자</th>
+                <th className="whitespace-nowrap px-4 py-3">주차장</th>
+                <th className="whitespace-nowrap px-4 py-3">구역</th>
+                <th className="whitespace-nowrap px-4 py-3">상태</th>
+                <th className="whitespace-nowrap px-4 py-3">신청일</th>
+                <th className="whitespace-nowrap px-4 py-3">처리</th>
               </tr>
-            ) : null}
-          </tbody>
-        </table>
+            </thead>
+
+            <tbody>
+              {items.map((item, index) => (
+                <tr key={item.id} className="border-t">
+                  <td className="whitespace-nowrap px-4 py-3">{index + 1}</td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {item.requester?.name ?? item.name ?? '-'}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {item.parkingLot?.name ??
+                      item.parkingLot?.code ??
+                      item.requestedParkingLotId ??
+                      '-'}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {item.parkingSection?.name ??
+                      item.parkingSection?.code ??
+                      item.requestedSectionId ??
+                      '-'}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3">{statusLabel(item.status)}</td>
+                  <td className="whitespace-nowrap px-4 py-3">{formatDate(item.createdAt)}</td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    <div className="flex flex-nowrap gap-2">
+                      <button
+                        type="button"
+                        disabled={reviewingId === item.id}
+                        onClick={() => review(item.id, 'APPROVED')}
+                        className="whitespace-nowrap rounded-xl bg-emerald-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50"
+                      >
+                        승인
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={reviewingId === item.id}
+                        onClick={() => review(item.id, 'REJECTED')}
+                        className="whitespace-nowrap rounded-xl border px-3 py-2 text-xs font-medium text-slate-700 disabled:opacity-50"
+                      >
+                        반려
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+
+              {!loading && items.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={7}
+                    className="px-4 py-10 text-center text-slate-500"
+                  >
+                    대기 중인 운영자 구역 권한 승인 요청이 없습니다.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
       </section>
     </main>
   );

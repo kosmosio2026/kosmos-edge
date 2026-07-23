@@ -217,8 +217,13 @@ pub async fn run_ws_server(pool: PgPool) -> anyhow::Result<()> {
         .merge(ws_routes)
         .with_state(state);
 
-    let addr = "0.0.0.0:3002";
-    let listener = TcpListener::bind(addr).await?;
+    let port = std::env::var("SENSOR_DAEMON_WS_PORT")
+        .unwrap_or_else(|_| "3006".to_string())
+        .parse::<u16>()
+        .map_err(|error| anyhow::anyhow!("Invalid SENSOR_DAEMON_WS_PORT: {error}"))?;
+
+    let addr = format!("0.0.0.0:{port}");
+    let listener = TcpListener::bind(addr.as_str()).await?;
     info!("WebSocket + API server listening on http://{addr}");
 
     axum::serve(listener, app).await?;

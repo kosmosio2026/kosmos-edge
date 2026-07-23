@@ -6,7 +6,8 @@
     "build": "nest build",
     "dev": "nest start --watch",
     "start": "node dist/main.js",
-    "lint": "eslint \"src/**/*.ts\""
+    "lint": "eslint \"src/**/*.ts\"",
+    "prebuild": "pnpm --filter @parking/db build"
   },
   "dependencies": {
     "@nestjs/common": "10.4.22",
@@ -21,7 +22,7 @@
     "@nestjs/swagger": "7.4.2",
     "@nestjs/websockets": "10.4.22",
     "@parking/db": "workspace:*",
-    "@parking/shared": "file:../../packages/shared",
+    "@parking/shared": "workspace:*",
     "@prisma/client": "^5.22.0",
     "bcrypt": "^5.1.1",
     "class-transformer": "^0.5.1",

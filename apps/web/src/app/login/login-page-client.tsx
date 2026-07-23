@@ -1,5 +1,7 @@
 'use client';
 
+import { isEdgeWeb } from '@/lib/app-profile';
+
 import { useMemo, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { getDefaultRedirectPath } from '@/lib/auth';
@@ -14,16 +16,6 @@ type LoginPageClientProps = {
   roleHint?: LoginRoleHint;
   defaultRedirect?: string;
   defaultEmail?: string;
-};
-
-const DEFAULT_PASSWORD = 'kosmos2026!!';
-
-const ROLE_DEMO_EMAILS: Record<LoginRoleHint, string> = {
-  ADMIN: 'admin@kosmos.test',
-  MANAGER: 'manager@kosmos.test',
-  OPERATOR: 'operator@kosmos.test',
-  MEMBER: 'member@kosmos.test',
-  VISITOR: 'visitor@kosmos.test',
 };
 
 function safeRedirectPath(value: string | null) {
@@ -94,25 +86,21 @@ function hasRole(session: any, role: LoginRoleHint) {
 function getRoleDefaultRedirect(session: any) {
   const roles = normalizeRoles(session);
 
-  if (roles.includes('ADMIN')) return '/admin/dashboard';
+  if (roles.includes('ADMIN') && !isEdgeWeb()) return '/admin/dashboard';
   if (roles.includes('MANAGER')) return '/manager/dashboard';
   if (roles.includes('OPERATOR')) return '/operator/dashboard';
+  if (roles.includes('ADMIN') && isEdgeWeb()) return '/manager/dashboard';
   if (roles.includes('MEMBER')) return '/member';
   if (roles.includes('VISITOR')) return '/visitor';
 
   return getDefaultRedirectPath(session);
 }
 
-function getDefaultEmail(roleHint?: LoginRoleHint, defaultEmail?: string) {
-  if (defaultEmail) return defaultEmail;
-  if (roleHint) return ROLE_DEMO_EMAILS[roleHint];
-
-  /*
-   Root login is for member / visitor by default.
-   Admin / manager / operator should use their dedicated URLs:
-   /admin/login, /manager/login, /operator/login
-  */
-  return ROLE_DEMO_EMAILS.MEMBER;
+function getDefaultEmail(
+  _roleHint?: LoginRoleHint,
+  defaultEmail?: string,
+) {
+  return defaultEmail?.trim() ?? '';
 }
 
 function getWrongRoleLoginPath(roleHint: LoginRoleHint) {
@@ -138,7 +126,7 @@ export default function LoginPageClient({
   );
 
   const [email, setEmail] = useState(initialEmail);
-  const [password, setPassword] = useState(DEFAULT_PASSWORD);
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(() => {
     const reason = searchParams.get('reason');
 
@@ -213,11 +201,11 @@ export default function LoginPageClient({
       <section className="grid w-full max-w-5xl overflow-hidden rounded-3xl bg-white shadow-2xl md:grid-cols-2">
         <div className="hidden bg-slate-950 p-10 text-white md:block">
           <p className="text-sm font-medium text-blue-300">
-            Smart Parking Platform
+            KOSMOS 스마트 주차관제 플랫폼
           </p>
 
           <h1 className="mt-6 text-4xl font-bold leading-tight">
-            Kosmos Parking Console
+            KOSMOS 주차관제 콘솔
           </h1>
 
           <p className="mt-4 text-sm leading-6 text-slate-300">
@@ -259,6 +247,9 @@ export default function LoginPageClient({
               </span>
 
               <input
+                id="email"
+                name="email"
+                type="email"
                 value={email}
                 onChange={(event) =>
                   setEmail(event.target.value)
@@ -274,6 +265,8 @@ export default function LoginPageClient({
               </span>
 
               <input
+                id="password"
+                name="password"
                 type="password"
                 value={password}
                 onChange={(event) =>
@@ -299,17 +292,6 @@ export default function LoginPageClient({
             {loading ? 'Logging in...' : 'Login'}
           </button>
 
-          <div className="mt-5 space-y-1 text-center text-xs text-slate-400">
-            <p>Password: {DEFAULT_PASSWORD}</p>
-            {roleHint ? (
-              <p>Demo account: {ROLE_DEMO_EMAILS[roleHint]}</p>
-            ) : (
-              <>
-                <p>Member demo: {ROLE_DEMO_EMAILS.MEMBER}</p>
-                <p>Visitor demo: {ROLE_DEMO_EMAILS.VISITOR}</p>
-              </>
-            )}
-          </div>
         </form>
       </section>
     </main>

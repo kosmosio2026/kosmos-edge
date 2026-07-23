@@ -4,10 +4,20 @@ import type {
   SpaceRegisterPayload,
 } from '@/types/operator';
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ??
-  process.env.NEXT_PUBLIC_API_URL ??
-  'http://localhost:3000/api';
+function resolveApiBaseUrl() {
+  const configured =
+    typeof window === 'undefined'
+      ? process.env.API_BASE_URL ??
+        process.env.NEXT_PUBLIC_API_BASE_URL ??
+        process.env.NEXT_PUBLIC_API_URL ??
+        'http://127.0.0.1:3000/api'
+      : process.env.NEXT_PUBLIC_API_BASE_URL ??
+        process.env.NEXT_PUBLIC_API_URL ??
+        '/api';
+
+  return configured.trim().replace(/\/+$/, '');
+}
+
 
 export type ApiErrorPayload = {
   ok?: false;
@@ -418,7 +428,7 @@ export async function request<T>(
     headers.set('Authorization', `Bearer ${accessToken}`);
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${resolveApiBaseUrl()}${path}`, {
     ...init,
     headers,
     cache: 'no-store',
@@ -560,6 +570,7 @@ export type LiveSpaceState =
   | 'OCCUPIED_UNREGISTERED'
   | 'UNREGISTERED_OVERDUE'
   | 'PAYMENT_GRACE_EXPIRED'
+  | 'TENANT_VISIT_GRACE'
   | 'LONG_PARKING_ALERT'
   | 'EXITED_UNPAID'
   | 'DISABLED'
@@ -569,6 +580,8 @@ export type LiveSpaceState =
 export type LiveSpace = {
   parkingLotId: string | null;
   parkingLotName: string | null;
+  parkingLotCode?: string | null;
+  parkingLotOperationMode?: 'SENSOR' | 'MANUAL' | string | null;
   sectionId: string;
   sectionCode: string | null;
   spaceId: string;
@@ -590,6 +603,11 @@ export type LiveSpace = {
     status: string;
     isRegistered: boolean;
     entryTime: string | null;
+    exitTime?: string | null;
+    entrySource?: 'SENSOR' | 'MANUAL' | string | null;
+    exitSource?: 'SENSOR' | 'MANUAL' | string | null;
+    manualEntryAt?: string | null;
+    manualExitAt?: string | null;
     unregisteredOverdue: boolean;
     unregisteredOverdueAt: string | null;
     paymentStatus?: string | null;
@@ -628,45 +646,12 @@ export type LiveSpacesResponse = {
   spaces: LiveSpace[];
 };
 
-export async function getLiveParkingSpaces() {
+export async function getLiveParkingSpaces(accessToken?: string) {
   return request<LiveSpacesResponse>('/parking-monitor/spaces/live', {
-    auth: false,
+    accessToken,
   });
 }
 
-export async function sendSensorEvent(
-  devEui: string,
-  parkingStatus: 'OCCUPIED' | 'EMPTY',
-) {
-  const response = await fetch('/api/operator/sensor-event', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      devEui,
-      parkingStatus,
-    }),
-    cache: 'no-store',
-  });
-
-  const text = await response.text();
-
-  let payload: unknown = null;
-  if (text) {
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      payload = text;
-    }
-  }
-
-  if (!response.ok) {
-    throw new ApiError(response.status, payload);
-  }
-
-  return payload;
-}
 
 export async function registerParkingSession(
   payload: {
@@ -689,6 +674,37 @@ export async function registerParkingSession(
       registrationSource: 'CLOUD_ADMIN',
       ...payload,
     }),
+  });
+}
+
+export async function manualEntryParkingSession(
+  input: {
+    parkingSpaceId: string;
+    plateNumber?: string | null;
+    contactNumber?: string | null;
+  },
+  accessToken: string,
+) {
+  return request('/parking-sessions/manual-entry', {
+    method: 'POST',
+    accessToken,
+    body: JSON.stringify(input),
+  });
+}
+
+export async function manualExitParkingSession(
+  sessionId: string,
+  input: {
+    collectedAmount?: number | string | null;
+    paymentMethod?: string | null;
+    note?: string | null;
+  },
+  accessToken: string,
+) {
+  return request(`/parking-sessions/${sessionId}/manual-exit`, {
+    method: 'POST',
+    accessToken,
+    body: JSON.stringify(input),
   });
 }
 

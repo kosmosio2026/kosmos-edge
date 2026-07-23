@@ -1,13 +1,33 @@
 {
   "name": "@parking/shared",
-  "version": "0.0.1",
+  "version": "0.0.0",
   "private": true,
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "scripts": {
-    "build": "tsc -p tsconfig.json"
-  },
-  "devDependencies": {
-    "typescript": "^5.6.3"
+  "main": "./runtime/index.cjs",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "require": "./runtime/index.cjs",
+      "import": "./runtime/index.cjs",
+      "default": "./runtime/index.cjs"
+    },
+    "./validation": {
+      "types": "./src/validation/index.ts",
+      "require": "./runtime/validation/index.cjs",
+      "import": "./runtime/validation/index.cjs",
+      "default": "./runtime/validation/index.cjs"
+    },
+    "./realtime": {
+      "types": "./src/realtime/index.ts",
+      "require": "./runtime/realtime/index.cjs",
+      "import": "./runtime/realtime/index.cjs",
+      "default": "./runtime/realtime/index.cjs"
+    },
+    "./pagination": {
+      "types": "./src/pagination/index.ts",
+      "require": "./runtime/pagination/index.cjs",
+      "import": "./runtime/pagination/index.cjs",
+      "default": "./runtime/pagination/index.cjs"
+    }
   }
 }

@@ -484,7 +484,7 @@ export default function UnpaidInvoicesPage() {
         <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="text-sm font-semibold text-blue-600">
-              Kosmos Parking Console
+              KOSMOS 주차관제 콘솔
             </p>
 
             <h1 className="mt-1 text-3xl font-bold text-slate-950">

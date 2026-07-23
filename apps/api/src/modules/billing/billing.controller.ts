@@ -1,8 +1,14 @@
 import {
+  Body,
   Controller,
+  Delete,
   Get,
+  Inject,
   Param,
+  Patch,
   Post,
+  Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 
@@ -12,12 +18,60 @@ import { RequirePermission } from '../../common/decorators/require-permission.de
 import { PERMISSIONS } from '../../common/rbac/permissions';
 
 import { BillingService } from './billing.service';
+import { BillingSummaryService } from './billing-summary.service';
+import { ParkingDiscountProgramsService } from './parking-discount-programs.service';
+import { CreateParkingDiscountProgramDto } from './dto/create-parking-discount-program.dto';
+import { UpdateParkingDiscountProgramDto } from './dto/update-parking-discount-program.dto';
 
 @Controller('billing')
 @UseGuards(JwtAuthGuard, PermissionGuard)
 export class BillingController {
-  constructor(private readonly billingService: BillingService) {}
+  @Inject(BillingSummaryService)
+  private readonly billingSummaryService!: BillingSummaryService;
 
+  constructor(
+    private readonly billingService: BillingService,
+    private readonly parkingDiscountProgramsService: ParkingDiscountProgramsService,
+  ) {}
+
+  @Get('discount-eligibilities')
+  @RequirePermission(PERMISSIONS.BILLING_DISCOUNT_READ)
+  listDiscountEligibilities() {
+    return this.parkingDiscountProgramsService.listEligibilityDefinitions();
+  }
+
+  @Get('discount-programs')
+  @RequirePermission(PERMISSIONS.BILLING_DISCOUNT_READ)
+  listDiscountPrograms(@Query('parkingLotId') parkingLotId?: string) {
+    return this.parkingDiscountProgramsService.list(parkingLotId);
+  }
+
+  @Get('discount-programs/:id')
+  @RequirePermission(PERMISSIONS.BILLING_DISCOUNT_READ)
+  getDiscountProgram(@Param('id') id: string) {
+    return this.parkingDiscountProgramsService.get(id);
+  }
+
+  @Post('discount-programs')
+  @RequirePermission(PERMISSIONS.BILLING_DISCOUNT_MANAGE)
+  createDiscountProgram(@Body() dto: CreateParkingDiscountProgramDto) {
+    return this.parkingDiscountProgramsService.create(dto);
+  }
+
+  @Patch('discount-programs/:id')
+  @RequirePermission(PERMISSIONS.BILLING_DISCOUNT_MANAGE)
+  updateDiscountProgram(
+    @Param('id') id: string,
+    @Body() dto: UpdateParkingDiscountProgramDto,
+  ) {
+    return this.parkingDiscountProgramsService.update(id, dto);
+  }
+
+  @Delete('discount-programs/:id')
+  @RequirePermission(PERMISSIONS.BILLING_DISCOUNT_MANAGE)
+  removeDiscountProgram(@Param('id') id: string) {
+    return this.parkingDiscountProgramsService.remove(id);
+  }
 
   @Get()
   @RequirePermission(PERMISSIONS.BILLING_READ)
@@ -25,10 +79,52 @@ export class BillingController {
     return this.billingService.listBillingRecords();
   }
 
+  @Get('summary/options')
+  @RequirePermission('billing.summary.read')
+  getSummaryOptions(
+    @Req() req: any,
+    @Query('region') region?: string,
+    @Query('district') district?: string,
+  ) {
+    return this.billingSummaryService.getFilterOptions({
+      user: req.user,
+      region,
+      district,
+    });
+  }
+
+  @Get('summary/filter-options')
+  @RequirePermission('billing.summary.read')
+  getSummaryFilterOptions(
+    @Req() req: any,
+    @Query('region') region?: string,
+    @Query('district') district?: string,
+  ) {
+    return this.billingSummaryService.getFilterOptions({
+      user: req.user,
+      region,
+      district,
+    });
+  }
+
   @Get('summary')
-  @RequirePermission(PERMISSIONS.BILLING_SUMMARY_READ)
-  getSummary() {
-    return this.billingService.getSummary();
+  @RequirePermission('billing.summary.read')
+  getSummary(
+    @Req() req: any,
+    @Query('region') region?: string,
+    @Query('district') district?: string,
+    @Query('parkingLotId') parkingLotId?: string,
+    @Query('year') year?: string,
+    @Query('month') month?: string,
+  ) {
+    return this.billingSummaryService.getSummary({
+      user: req.user,
+      region,
+      district,
+      parkingLotId,
+      year,
+      month,
+    });
   }
 
   @Get('outstanding')

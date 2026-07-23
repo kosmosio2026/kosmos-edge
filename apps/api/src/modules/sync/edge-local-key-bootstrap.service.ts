@@ -1,3 +1,4 @@
+import { isConnectedEdgeProfile } from '../../common/config/app-mode';
 import {
   Injectable,
   Logger,
@@ -135,12 +136,6 @@ export class EdgeLocalKeyBootstrapService implements OnModuleInit {
   }
 
   private shouldRun() {
-    const appMode = (
-      process.env.APP_PROFILE ??
-      process.env.APP_MODE ??
-      'cloud'
-    ).toLowerCase();
-
-    return appMode === 'edge';
+    return isConnectedEdgeProfile();
   }
 }

@@ -1,9 +1,11 @@
 'use client';
 
+import { normalizePin, validateVisitorPin } from '@parking/shared/validation';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { MobileAppShell } from '@/components/mobile/mobile-app-shell';
 import { apiFetch } from '@/lib/api-client';
+import { FORM_HINTS, FORM_PLACEHOLDERS } from '@/lib/forms/placeholders';
 
 function formatPhone(value: string) {
   return value.replace(/[^0-9]/g, '').slice(0, 11);
@@ -72,12 +74,15 @@ export default function MobileVisitorResetPinPage() {
       return;
     }
 
-    if (!/^\d{4,6}$/.test(pin.trim())) {
-      setMessage('새 PIN은 숫자 4~6자리로 입력하세요.');
+    const pinValidation = validateVisitorPin(pin);
+    const normalizedPinConfirm = normalizePin(pinConfirm);
+
+    if (!pinValidation.ok) {
+      setMessage(pinValidation.message ?? '새 PIN은 숫자 4~6자리로 입력하세요.');
       return;
     }
 
-    if (pin !== pinConfirm) {
+    if (pinValidation.normalized !== normalizedPinConfirm) {
       setMessage('새 PIN과 확인 PIN이 일치하지 않습니다.');
       return;
     }
@@ -91,7 +96,7 @@ export default function MobileVisitorResetPinPage() {
         body: JSON.stringify({
           phone: normalizedPhone,
           code: code.trim(),
-          pin: pin.trim(),
+          pin: pinValidation.normalized,
         }),
       });
 
@@ -115,7 +120,7 @@ export default function MobileVisitorResetPinPage() {
             value={phone}
             onChange={(event) => setPhone(formatPhone(event.target.value))}
             inputMode="numeric"
-            placeholder="01012345678"
+            placeholder={FORM_PLACEHOLDERS.mobilePhone}
             className="mt-2 w-full rounded-2xl border px-4 py-3 text-base font-bold text-slate-950"
           />
 
@@ -148,10 +153,11 @@ export default function MobileVisitorResetPinPage() {
                 <label className="block text-xs font-black text-slate-500">새 PIN</label>
                 <input
                   value={pin}
-                  onChange={(event) => setPin(event.target.value.replace(/[^0-9]/g, '').slice(0, 6))}
+                  onChange={(event) => setPin(normalizePin(event.target.value))}
                   inputMode="numeric"
                   type="password"
-                  placeholder="숫자 4~6자리"
+                  maxLength={6}
+                    placeholder={FORM_PLACEHOLDERS.visitorPin}
                   className="mt-2 w-full rounded-2xl border px-4 py-3 text-base font-bold text-slate-950"
                 />
               </div>
@@ -160,10 +166,11 @@ export default function MobileVisitorResetPinPage() {
                 <label className="block text-xs font-black text-slate-500">새 PIN 확인</label>
                 <input
                   value={pinConfirm}
-                  onChange={(event) => setPinConfirm(event.target.value.replace(/[^0-9]/g, '').slice(0, 6))}
+                  onChange={(event) => setPinConfirm(normalizePin(event.target.value))}
                   inputMode="numeric"
                   type="password"
-                  placeholder="다시 입력"
+                  maxLength={6}
+                    placeholder={FORM_PLACEHOLDERS.visitorPinConfirm}
                   className="mt-2 w-full rounded-2xl border px-4 py-3 text-base font-bold text-slate-950"
                 />
               </div>
