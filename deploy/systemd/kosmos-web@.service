@@ -1,0 +1,25 @@
+[Unit]
+Description=KOSMOS Web (%i)
+Requires=kosmos-api@%i.service
+After=network-online.target kosmos-api@%i.service
+Wants=network-online.target
+PartOf=kosmos-profile@%i.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=__KOSMOS_RUN_USER__
+Group=__KOSMOS_RUN_GROUP__
+WorkingDirectory=__KOSMOS_ROOT__
+Environment=HOME=__KOSMOS_HOME__
+Environment=PATH=__KOSMOS_RUNTIME_PATH__
+ExecStart=/usr/bin/bash __KOSMOS_ROOT__/scripts/start-profile.sh %i web
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+SyslogIdentifier=kosmos-web-%i
+
+[Install]
+WantedBy=multi-user.target

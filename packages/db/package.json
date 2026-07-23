@@ -12,24 +12,38 @@
     "./generated/client": {
       "types": "./generated/client/index.d.ts",
       "default": "./generated/client/index.js"
+    },
+    "./security/password": {
+      "types": "./dist/src/security/password.d.ts",
+      "default": "./dist/src/security/password.js"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "db:generate": "prisma generate --schema=./prisma/schema.prisma",
     "db:push": "prisma db push --schema=./prisma/schema.prisma",
     "db:migrate": "prisma migrate dev --schema=./prisma/schema.prisma",
-    "db:seed": "tsx prisma/seed.ts",
+    "db:seed": "tsx prisma/seed-rbac.ts",
     "seed:rbac": "tsx prisma/seed-rbac.ts",
     "seed:edge": "tsx prisma/seed-edge.ts",
     "seed:sensor-dev": "tsx prisma/seed-sensor-dev.ts",
-    "seed:test-account": "tsx prisma/seed-test-account.ts"
+    "seed:test-account": "tsx prisma/seed-test-account.ts",
+    "typecheck:scripts": "tsc -p tsconfig.json --noEmit",
+    "seed": "tsx prisma/seed-rbac.ts",
+    "seed:core": "tsx prisma/seed-rbac.ts",
+    "seed:admin": "tsx prisma/seed-admin.ts",
+    "seed:edge-bootstrap": "tsx prisma/seed-edge.ts",
+    "seed:demo": "tsx prisma/seed-demo.ts",
+    "seed:display-demo": "tsx prisma/displaySeed.ts",
+    "seed:test-accounts": "tsx prisma/seed-test-accounts.ts",
+    "seed:bootstrap-account": "tsx prisma/seed-bootstrap-account.ts"
   },
   "prisma": {
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed-rbac.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
+    "argon2": "^0.44.0",
     "bcryptjs": "^3.0.3"
   },
   "devDependencies": {

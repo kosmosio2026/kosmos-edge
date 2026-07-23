@@ -79,3 +79,42 @@ apps/android/app/build/
 # Android
 # -----------------------------
 apps/android/app/build/
+apps/android/.signing/
+apps/android/keystore.properties
+*.jks
+*.keystore
+apps/api/.env.edge-standalone
+apps/web/.env.edge-standalone
+apps/api/dist-*
+apps/web/.next-*
+
+# Python generated files
+__pycache__/
+*.py[cod]
+
+# BEGIN KOSMOS LOCAL RUNTIME ARTIFACTS
+# Local build, backup, rehearsal and runtime state
+build/
+backups/
+.backup/
+.runtime/
+
+# Real runtime environment files
+apps/api/.env.*
+apps/web/.env.*
+edge/sensor-daemon/.env.*
+
+# Environment templates may be committed
+!apps/api/.env.example
+!apps/web/.env.example
+!edge/sensor-daemon/.env.example
+
+# Local emergency copies and temporary scripts
+**/*.bak
+**/*.bak.*
+**/*.broken.*
+**/*.fixbak.*
+**/.tmp-*
+**/*.tmp
+**/*.tmp.*
+# END KOSMOS LOCAL RUNTIME ARTIFACTS

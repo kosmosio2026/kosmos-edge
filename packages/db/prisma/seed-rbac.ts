@@ -192,6 +192,20 @@ const permissions = [
   ['rbac.read', 'RBAC Read', 'rbac', 'read'],
   ['rbac.update', 'RBAC Update', 'rbac', 'update'],
   ['rbac.manage', 'RBAC Manage', 'rbac', 'manage'],
+  ['authority-registration.review', 'Authority Registration Review', 'authority-registration', 'review'],
+  ['billing.discount.read', 'Billing Discount Read', 'billing', 'discount.read'],
+  ['billing.fee-policy.read', 'Billing Fee Policy Read', 'billing', 'fee-policy.read'],
+  ['control-panel.read', 'Control Panel Read', 'control-panel', 'read'],
+  ['control-panel.manage', 'Control Panel Manage', 'control-panel', 'manage'],
+  ['display.command', 'Display Command', 'display', 'command'],
+  ['outstanding.read', 'Outstanding Read', 'outstanding', 'read'],
+  ['parking.lot.write', 'Parking Lot Write', 'parking', 'lot.write'],
+  ['session.read', 'Session Read', 'session', 'read'],
+  ['settlement.read', 'Settlement Read', 'settlement', 'read'],
+  ['tenant.coupon.read', 'Tenant Coupon Read', 'tenant', 'coupon.read'],
+  ['tenant.coupon.manage', 'Tenant Coupon Manage', 'tenant', 'coupon.manage'],
+  ['tenant.coupon.assign', 'Tenant Coupon Assign', 'tenant', 'coupon.assign'],
+
 ] as const;
 
 const allPermissionKeys = permissions.map(([key]) => key);
@@ -235,6 +249,20 @@ const managerPermissions = [
   'alert.acknowledge',
   'alert.resolve',
   'sync.read',
+  'authority-registration.review',
+  'billing.discount.read',
+  'billing.fee-policy.read',
+  'control-panel.read',
+  'control-panel.manage',
+  'display.command',
+  'outstanding.read',
+  'parking.lot.write',
+  'session.read',
+  'settlement.read',
+  'tenant.coupon.read',
+  'tenant.coupon.manage',
+  'tenant.coupon.assign',
+
 ];
 
 const operatorPermissions = [
@@ -251,6 +279,7 @@ const operatorPermissions = [
   'device.status.read',
   'device.fault.read',
   'device.fault.acknowledge',
+  'device.fault.resolve',
   'billing.summary.read',
   'payment.read',
   'payment.manage',
@@ -258,6 +287,10 @@ const operatorPermissions = [
   'alert.read',
   'alert.acknowledge',
   'alert.resolve',
+  'display.command',
+  'outstanding.read',
+  'session.read',
+
 ];
 
 const memberPermissions = [

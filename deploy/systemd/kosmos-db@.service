@@ -1,0 +1,24 @@
+[Unit]
+Description=KOSMOS Database Preparation (%i)
+After=network-online.target postgresql.service
+Wants=network-online.target
+PartOf=kosmos-profile@%i.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=__KOSMOS_RUN_USER__
+Group=__KOSMOS_RUN_GROUP__
+WorkingDirectory=__KOSMOS_ROOT__
+Environment=HOME=__KOSMOS_HOME__
+Environment=PATH=__KOSMOS_RUNTIME_PATH__
+Environment=KOSMOS_ROOT=__KOSMOS_ROOT__
+ExecStart=/usr/bin/bash __KOSMOS_ROOT__/scripts/deploy/db-up.sh %i
+ExecStart=/usr/bin/bash __KOSMOS_ROOT__/scripts/deploy/db-prepare.sh %i
+TimeoutStartSec=300
+SyslogIdentifier=kosmos-db-%i
+
+[Install]
+WantedBy=multi-user.target
