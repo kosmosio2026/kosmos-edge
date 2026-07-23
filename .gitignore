@@ -237,3 +237,6 @@ cloud/**/node_modules/
 
 # Project temporary files
 /tmp/
+
+# Prisma generated client
+/packages/db/generated/
